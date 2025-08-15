@@ -1,0 +1,21 @@
+Option 2 Cleanup — remove legacy audit routes/UI
+================================================
+
+Search your codebase for these patterns and delete them:
+
+Backend (routes/middleware):
+- Any route like: app.get('/api/audit'...), app.get('/audit/logs'...), app.post('/audit/log'...)
+- Any custom middleware that sets/resolves an "audit" object for legacy handlers
+- Any old CSV export endpoints you no longer want to keep
+
+Frontend (Admin Tools page):
+- Any second "Audit Log" panel or iframe that points to the old route
+- Old buttons that hit legacy audit endpoints
+
+Keep only:
+- Unified GET /audit  (for admin visibility check)
+- Your single Audit Viewer (the one you actually want to use)
+
+After removal:
+- Restart the server, hard refresh the browser
+- Verify that /admin.html shows only one Audit section

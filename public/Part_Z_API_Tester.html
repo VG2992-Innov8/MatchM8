@@ -1,0 +1,72 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>MatchM8 API Tester</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, Arial; padding: 20px; }
+    button { margin: 4px 0; }
+    pre { background:#f6f6f6; padding:10px; border:1px solid #ddd; overflow:auto; }
+    input { padding:6px; margin:2px 0; width: 240px; }
+    label { display:block; margin-top:8px; }
+  </style>
+</head>
+<body>
+  <h1>MatchM8 API Tester</h1>
+
+  <section>
+    <h3>Auth PIN</h3>
+    <label>Name <input id="name" value="Toby"></label>
+    <label>PIN <input id="pin" value="1111"></label>
+    <button onclick="call('/api/auth/pin/set',{name:val('name'),pin:val('pin')})">Set PIN</button>
+    <button onclick="call('/api/auth/pin/verify',{name:val('name'),pin:val('pin')})">Verify PIN</button>
+  </section>
+
+  <section>
+    <h3>Predictions</h3>
+    <label>Week <input id="week" value="3"></label>
+    <label>Player ID <input id="pid" value="1"></label>
+    <button onclick="savePreds()">Save Predictions (2 fixtures)</button>
+  </section>
+
+  <section>
+    <h3>Scoring</h3>
+    <button onclick="call('/api/scores/calc',{week:val('week'),overwrite:true})">Calculate & Save</button>
+    <button onclick="get('/api/scores/summary?week='+encodeURIComponent(val('week')))">Summary</button>
+    <button onclick="get('/api/scores/season')">Season</button>
+    <button onclick="get('/api/fixtures?week='+encodeURIComponent(val('week')))">Check Fixtures</button>
+
+  </section>
+
+  <h3>Response</h3>
+  <pre id="out">Waiting…</pre>
+
+<script>
+const $ = s => document.querySelector(s);
+const val = id => document.getElementById(id).value;
+
+function show(obj){ $('#out').textContent = JSON.stringify(obj,null,2); }
+
+async function call(url, body){
+  const r = await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  show(await r.json());
+}
+async function get(url){
+  const r = await fetch(url);
+  show(await r.json());
+}
+async function savePreds(){
+  const body = {
+    week: String(val('week')),
+    player_id: String(val('pid')),
+    predictions: {
+      'W3-1': { home: 1, away: 2 },
+      'W3-2': { home: 0, away: 1 }
+    }
+  };
+  await call('/api/predictions/save', body);
+}
+</script>
+</body>
+</html>

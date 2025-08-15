@@ -1,0 +1,128 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>MatchM8 — Part C Admin</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body{font-family:system-ui,Arial,sans-serif;margin:24px}
+    table{border-collapse:collapse;width:100%;margin-top:12px}
+    th,td{border:1px solid #ddd;padding:8px}
+    th{background:#f5f5f5;text-align:left}
+    input[type="number"]{width:60px}
+    input[type="datetime-local"]{min-width:240px}
+    .row{display:flex;gap:12px;align-items:center;margin-bottom:8px}
+    .ok{color:#0a7a0a}
+    .err{color:#b00020}
+  </style>
+</head>
+<body>
+  <h1>Part C — Admin: Enter Final Scores</h1>
+
+  <div class="row">
+    <label>Week:
+      <input id="week" type="number" min="1" step="1" value="1" />
+    </label>
+    <button id="load">Load Fixtures</button>
+    <button id="save" disabled>Save Updates</button>
+    <span id="status"></span>
+  </div>
+
+  <table id="tbl">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Home</th>
+        <th>Away</th>
+        <th>Kickoff (local)</th>
+        <th>FT Home</th>
+        <th>FT Away</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+    const $ = s => document.querySelector(s);
+    const tbody = $("#tbl tbody");
+    const status = $("#status");
+    const loadBtn = $("#load");
+    const saveBtn = $("#save");
+
+    loadBtn.addEventListener("click", async () => {
+      const week = String($("#week").value || "").trim();
+      status.textContent = "";
+      tbody.innerHTML = "";
+      saveBtn.disabled = true;
+
+      const res = await fetch(`/api/fixtures?week=${encodeURIComponent(week)}`);
+      if (!res.ok) { msg("Failed to load fixtures", true); return; }
+      const data = await res.json();
+      render(data.fixtures);
+      saveBtn.disabled = false;
+    });
+
+    saveBtn.addEventListener("click", async () => {
+      const week = String($("#week").value || "").trim();
+      const updates = Array.from(tbody.querySelectorAll("tr")).map(tr => {
+        const id = tr.dataset.id;
+        const koVal = tr.querySelector(".ko").value;
+        const ftH = tr.querySelector(".ft_home").value;
+        const ftA = tr.querySelector(".ft_away").value;
+        return {
+          id,
+          kickoff: koVal ? toISOWithLocalOffset(koVal) : "",
+          ft_home: ftH,
+          ft_away: ftA
+        };
+      });
+
+      const res = await fetch("/api/fixtures/update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ week, updates })
+      });
+      if (!res.ok) {
+        const e = await res.json().catch(()=>({}));
+        msg("Save failed" + (e.error ? `: ${e.error}` : ""), true);
+        return;
+      }
+      msg("Saved ✔");
+    });
+
+    function render(fixtures){
+      tbody.innerHTML = fixtures.map(f => `
+        <tr data-id="${f.id}">
+          <td>${f.id}</td>
+          <td>${f.home}</td>
+          <td>${f.away}</td>
+          <td><input type="datetime-local" class="ko" value="${toLocalInputValue(f.kickoff)}"></td>
+          <td><input type="number" class="ft_home" min="0" step="1" value="${numOrEmpty(f.ft_home)}"></td>
+          <td><input type="number" class="ft_away" min="0" step="1" value="${numOrEmpty(f.ft_away)}"></td>
+        </tr>
+      `).join("");
+    }
+
+    function numOrEmpty(v){ return (v === null || v === undefined || Number.isNaN(v)) ? "" : v; }
+
+    function toLocalInputValue(iso){
+      if (!iso) return "";
+      const d = new Date(iso);
+      if (isNaN(d)) return "";
+      const pad = n => String(n).padStart(2,"0");
+      return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate())+"T"+pad(d.getHours())+":"+pad(d.getMinutes());
+    }
+    function toISOWithLocalOffset(localStr){
+      // localStr: 'YYYY-MM-DDTHH:mm' -> ISO with local offset baked in
+      const d = new Date(localStr);
+      if (isNaN(d)) return "";
+      const t = new Date(d.getTime() - (d.getTimezoneOffset() * 60000)).toISOString();
+      return t.replace(".000Z", "");
+    }
+    function msg(text, isErr=false){
+      status.textContent = text;
+      status.className = isErr ? "err" : "ok";
+    }
+  </script>
+</body>
+</html>

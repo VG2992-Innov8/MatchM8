@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>MatchM8 — Part D: Scoring</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    .wrap { max-width: 960px; margin: 24px auto; padding: 16px; border: 1px solid #e5e7eb; border-radius: 12px; }
+    h1 { margin: 0 0 12px 0; }
+    .controls { display: flex; gap: 12px; align-items: center; margin: 12px 0; }
+    .hidden { display: none; }
+    table { border-collapse: collapse; width: 100%; margin-top: 16px; }
+    th, td { text-align: left; border-bottom: 1px solid #eee; padding: 8px; }
+    .winners { margin-top: 12px; font-weight: 600; }
+    #msg { color: #b91c1c; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Finalize Week — Scoring</h1>
+    <div class="controls">
+      <label>Week <input id="weekInput" type="number" min="1" style="width: 80px;" /></label>
+      <label><input id="overwrite" type="checkbox" /> Overwrite if already scored</label>
+      <button id="calcBtn">Calculate & Save</button>
+      <button id="previewBtn">Preview</button>
+      <a id="predLink" href="#" target="_blank">Open Predictions</a>
+    </div>
+
+    <div id="summary"></div>
+    <table id="scoresTable" class="hidden">
+      <thead>
+        <tr><th>Player</th><th>Total</th><th>Exact (5)</th><th>Result (2)</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+
+    <div class="winners" id="winners"></div>
+    <div id="msg"></div>
+  </div>
+
+  <!-- Load the scoring logic -->
+  <script src="/js/scoring_flow.js" defer></script>
+</body>
+</html>

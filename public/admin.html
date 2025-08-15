@@ -1,0 +1,155 @@
+<!doctype html>
+<html>
+<head>
+  <script>
+  // If admin.html is being embedded twice (or at all), pop it out to the top window.
+  if (window.top !== window.self) {
+    window.top.location = window.location.href;
+  }
+  </script>
+
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MatchM8 — Admin</title>
+  <style>
+    <script src="/js/nav.js"></script>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 20px; }
+    .row { display:flex; gap:12px; align-items:center; flex-wrap: wrap; }
+    .btn { padding: 8px 12px; border-radius: 8px; border: 1px solid #1e40af; background: #2563eb; color: white; cursor: pointer; }
+    .btn.secondary { background: white; color: #1e40af; }
+    input, select { padding: 6px 8px; border: 1px solid #ccc; border-radius: 8px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { padding: 8px; border-bottom: 1px solid #eee; text-align: left; font-size: 14px; vertical-align: top; }
+    th { background: #f8fafc; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+  </style>
+</head>
+<body>
+  <h1>Admin</h1>
+
+  <section>
+    <h2>Admin Access</h2>
+    <div class="row">
+      <input id="adminToken" type="text" placeholder="x-admin-token" style="min-width:280px" />
+      <button class="btn" onclick="saveToken()">Save Token</button>
+      <span id="adminCheck" style="font-size:14px;color:#64748b;"></span>
+    </div>
+  </section>
+
+  <section style="margin-top:24px;">
+    <h2>Exports</h2>
+    <div class="row">
+      <input id="csvWeek" type="number" min="1" placeholder="Week #" />
+      <button class="btn" onclick="exportPredsCSV()">Export Predictions CSV</button>
+
+      <input id="csvWeekTo" type="number" min="1" placeholder="Week To #" />
+      <button class="btn" onclick="exportLeaderboardCSV()">Export Leaderboard CSV</button>
+    </div>
+  </section>
+
+  <section style="margin-top:24px;">
+    <h2>Audit Log</h2>
+    <div class="row">
+      <select id="actorType">
+        <option value="">All actors</option>
+        <option value="admin">admin</option>
+        <option value="player">player</option>
+        <option value="system">system</option>
+      </select>
+      <input id="actionFilter" type="text" placeholder="action contains…" />
+      <input id="fromDate" type="datetime-local" />
+      <input id="toDate" type="datetime-local" />
+      <button class="btn" onclick="loadAudit()">Refresh</button>
+      <button class="btn secondary" onclick="exportAudit()">Export Audit CSV</button>
+    </div>
+
+    <table id="auditTable">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Actor</th>
+          <th>Actor ID</th>
+          <th>Action</th>
+          <th>Meta</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <script>
+    function token() { return localStorage.getItem('adminToken') || ''; }
+    function saveToken() {
+      const t = document.getElementById('adminToken').value.trim();
+      localStorage.setItem('adminToken', t);
+      checkAdmin();
+    }
+    async function checkAdmin() {
+      const el = document.getElementById('adminCheck');
+      el.textContent = 'Checking…';
+      try {
+        const res = await fetch('/audit', { headers: { 'x-admin-token': token() } });
+        el.textContent = res.ok ? '✅ Admin verified' : '❌ Invalid token';
+      } catch { el.textContent = '❌ Error'; }
+    }
+
+    async function exportWith(url, filename) {
+      const res = await fetch(url, { headers: { 'x-admin-token': token() } });
+      if (!res.ok) return alert('Export failed: ' + await res.text());
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      a.click();
+    }
+
+    function exportPredsCSV() {
+      const w = document.getElementById('csvWeek').value;
+      if (!w) return alert('Enter week');
+      exportWith(`/predictions/export.csv?week=${encodeURIComponent(w)}`, `predictions_week_${w}.csv`);
+    }
+    function exportLeaderboardCSV() {
+      const to = document.getElementById('csvWeekTo').value;
+      if (!to) return alert('Enter week_to');
+      exportWith(`/leaderboard/export.csv?week_to=${encodeURIComponent(to)}`, `leaderboard_to_week_${to}.csv`);
+    }
+
+    function qs(o) {
+      const p = Object.entries(o).filter(([,v]) => v!==undefined && v!=='').map(([k,v])=>`${encodeURIComponent(k)}=${encodeURIComponent(v)}`);
+      return p.length ? '?' + p.join('&') : '';
+    }
+
+    async function loadAudit() {
+      const params = {
+        limit: 200,
+        actor_type: document.getElementById('actorType').value,
+        action: document.getElementById('actionFilter').value.trim(),
+        from: document.getElementById('fromDate').value ? new Date(document.getElementById('fromDate').value).toISOString() : '',
+        to: document.getElementById('toDate').value ? new Date(document.getElementById('toDate').value).toISOString() : ''
+      };
+      const res = await fetch(`/audit/actions${qs(params)}`, { headers: { 'x-admin-token': token() } });
+      if (!res.ok) { alert('Load failed: ' + await res.text()); return; }
+      const data = await res.json();
+      const tb = document.querySelector('#auditTable tbody');
+      tb.innerHTML = '';
+      for (const r of data) {
+        const tr = document.createElement('tr');
+        const meta = typeof r.meta === 'object' ? JSON.stringify(r.meta) : r.meta;
+        tr.innerHTML = `
+          <td>${new Date(r.created_at).toLocaleString()}</td>
+          <td>${r.actor_type || ''}</td>
+          <td>${r.actor_id || ''}</td>
+          <td>${r.action || ''}</td>
+          <td><code>${(meta || '').replace(/</g,'&lt;')}</code></td>
+        `;
+        tb.appendChild(tr);
+      }
+    }
+
+    // init
+    document.getElementById('adminToken').value = token();
+    checkAdmin().then(loadAudit);
+  </script>
+  <script src="/js/nav.js"></script>
+</body>
+</html>

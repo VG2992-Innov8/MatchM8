@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>MatchM8 — Season Leaderboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; padding: 20px; }
+    h1 { margin-top: 0; }
+    table { border-collapse: collapse; width: 100%; max-width: 900px; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+    th { background: #f5f5f5; }
+    .mono { font-variant-numeric: tabular-nums; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .pill { display:inline-block; padding:2px 8px; border-radius:12px; background:#efefef; margin-left:6px; font-size:12px; }
+    .muted { color:#666; font-size: 14px; margin: 4px 0 16px; }
+  </style>
+</head>
+<body>
+  <h1>Season Leaderboard</h1>
+  <div id="meta" class="muted"></div>
+
+  <table id="seasonTable">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Player</th>
+        <th class="mono">Total</th>
+        <th class="mono">Exact (5)</th>
+        <th class="mono">Result (2)</th>
+        <th class="mono">Weeks</th>
+        <th>By Week</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <script defer src="/js/season_flow.js"></script>
+</body>
+</html>
