@@ -1,49 +1,80 @@
-# MatchM8 — Phase B + Audit Viewer (Drop‑in Bundle)
+# MatchM8
 
-This is a **runnable Express server** with the Phase B features:
-- Player PINs (set/verify) with hashed storage
-- Short‑lived prediction edit token (cookie)
-- Audit Log hooks for predictions, fixtures, results
-- Player Registration endpoint
-- Admin Audit Log viewer UI (React via CDN) + CSV export
-- Admin Sidebar + blue card styling
+Season-long soccer tipping app. Organizer sets weekly fixtures, players submit score predictions, admin enters results, and the system auto-scores with a season leaderboard.
 
-## Quick Start (Replit or local)
+## Current Features
+- Player login via **Name + PIN** (set/verify)
+- Weekly predictions (PIN → Predictions flow)
+- Admin enters actual scores
+- Scoring: **Exact = 5**, **Correct result = 2**, **Wrong = 0**
+- Weekly totals + cumulative **season leaderboard**
+- Season rollup stored to `data/season_scores.csv`
+- Routes mounted at both `/api/*` and root (e.g. `/api/scores` + `/scores`)
+- Week summary: `/summary?week={n}`
 
-1) Upload/extract this ZIP into a Node.js Replit (or clone locally).
-2) Create a `.env` from `.env.example` and set values:
-   - `SUPABASE_URL`
-   - `SUPABASE_SERVICE_ROLE_KEY`
-   - `ADMIN_TOKEN` (for Admin requests)
-   - `PRED_TOKEN_SECRET` (random long string)
-3) In the Replit shell (or local terminal):
-   ```bash
-   npm install
-   npm start
-   ```
-4) Open the web view: `http://localhost:3000/` (Admin UI link on the page).
+## Tech
+Node.js + Express  
+Deps: `express`, `dotenv`, `cors`, `cookie-parser`, `bcryptjs`, `jsonwebtoken`, `node-fetch`, `@supabase/supabase-js`
 
-## Endpoints
-- `POST /auth/pin/set` — set/change PIN
-- `POST /auth/pin/verify` — verify PIN and mint session cookie
-- `GET  /auth/check` — returns OK if cookie valid
-- `PUT  /predictions/upsert` — upsert prediction (requires PIN/cookie)
-- `POST /players/register` — public player registration
-- `POST /fixtures` (admin) — create fixture
-- `PUT  /fixtures/:id` (admin) — update fixture
-- `DELETE /fixtures/:id` (admin) — delete fixture
-- `POST /fixtures/copy-week` (admin) — copy fixtures from a week to another
-- `PUT  /results/upsert` (admin) — upsert result
-- `GET  /audit` (admin) — list audit log with filters & pagination
-- `GET  /audit/actions` (admin) — distinct actions for filters
-- `GET  /audit/export` (admin) — CSV export
+## Scripts
+```bash
+npm run dev   # nodemon: cls && node index.js
+npm start     # node index.js
+Run locally
+npm install
+npm run dev
+# open http://localhost:3000
 
-> All **admin** endpoints require `x-admin-token: <ADMIN_TOKEN>` header.
 
-## Notes
-- The server serves `/public` as static. The Admin UI is at `/admin.html`.
-- This bundle assumes your database has the Phase A migration applied:
-  - `players.pin_hash`, `players.email`, `players.created_at`
-  - `audit_log` table
-  - `predictions (player_id, match_id)` unique constraint
+Create .env from .env.example (not committed):
 
+PORT=3000
+JWT_SECRET=change-me
+SUPABASE_URL=
+SUPABASE_ANON_KEY=
+
+Useful Endpoints
+
+POST /auth/pin/set (by name or player_id)
+
+POST /auth/pin/verify
+
+/predictions (player UI)
+
+/scores and /api/scores
+
+/summary?week={n}
+
+/api/__routes (sanity check mounts)
+
+Structure
+routes/     # express routers
+public/     # static assets
+ui/         # simple HTML/JS pages
+data/       # fixtures, predictions, players, season scores
+
+Roadmap
+
+Email reminders (24h pre-deadline)
+
+Prediction lock at kickoff
+
+Simple admin auth page
+
+
+---
+
+### (Optional) Normalize line endings
+Add a new file **`.gitattributes`** at repo root with:
+
+
+text=auto
+*.js text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+
+
+### Sync to your machine
+Back in GitHub Desktop: **Fetch origin → Pull** to get the updated README/docs locally.
+
+Shout if you want me to prep a quick `docs/` index or a CONTRIBUTING blurb next.
