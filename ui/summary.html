@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MatchM8 — Summary</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; }
+    main { max-width: 800px; margin: 0 auto; }
+    .muted { color: #666; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>MatchM8 Summary</h1>
+    <p class="muted">Week: <span id="week"></span></p>
+    <div id="output">This is a placeholder summary page. We can wire it up to real data next.</div>
+  </main>
+
+  <script>
+    // Read ?week= from the URL so /ui/summary.html?week=1 shows "1"
+    const week = new URL(location.href).searchParams.get('week') || '1';
+    document.getElementById('week').textContent = week;
+  </script>
+</body>
+</html>

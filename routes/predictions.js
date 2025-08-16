@@ -1,196 +1,231 @@
 // routes/predictions.js
-// CommonJS Express router for MatchM8 predictions
-const express = require("express");
-const fs = require("fs");
-const path = require("path");
-const crypto = require("crypto");
+// Express router for MatchM8 predictions (per-fixture lock inside the handler)
+
+const express = require('express');
+const fs = require('fs');
+const path = require('path');
+const bcrypt = require('bcryptjs');
 
 const router = express.Router();
 
+const { loadFixturesForWeek } = require('../lib/fixtures');
+const { isLocked } = require('../lib/time');
+
 // ---------- File paths
-const DATA_DIR         = path.join(__dirname, "..", "data");
-const PREDICTIONS_PATH = path.join(DATA_DIR, "predictions.json");
-const FIXTURES_PATH    = path.join(DATA_DIR, "fixtures_by_week.json");
-// Optional players file (if you want to validate players/PINs later)
-const PLAYERS_PATH     = path.join(DATA_DIR, "players.json");
+const DATA_DIR          = path.join(__dirname, '..', 'data');
+const PREDICTIONS_PATH  = path.join(DATA_DIR, 'predictions.json');
+const PLAYERS_PATH      = path.join(DATA_DIR, 'players.json');
 
 // ---------- Env toggles
-// Set DEV_BYPASS_LOCK=1 in .env to allow late predictions during local dev
-const DEV_BYPASS_LOCK  = process.env.DEV_BYPASS_LOCK === "1";
+// DEV_BYPASS_LOCK=1 to allow late predictions during local dev
+const DEV_BYPASS_LOCK   = process.env.DEV_BYPASS_LOCK === '1';
+// REQUIRE_PIN=1 to require a PIN to save predictions
+const REQUIRE_PIN       = process.env.REQUIRE_PIN === '1';
 
-// Require a PIN match for saving predictions (optional, default off)
-const REQUIRE_PIN      = process.env.REQUIRE_PIN === "1";
-
-// ---------- Helpers: IO (atomic writes)
-function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-function atomicWriteJSON(absPath, obj) {
-  ensureDataDir();
-  const tmp = absPath + ".tmp";
-  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2));
-  fs.renameSync(tmp, absPath);
-}
-function readJSON(absPath, fallback) {
+// ---------- Utilities
+function readJsonFlexible(p, fallback) {
   try {
-    return JSON.parse(fs.readFileSync(absPath, "utf8"));
-  } catch {
-    return fallback;
-  }
+    if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch {}
+  return fallback;
+}
+function writeJsonPretty(p, obj) {
+  fs.writeFileSync(p, JSON.stringify(obj, null, 2), 'utf8');
+}
+function normalizeName(s) {
+  return (s || '').trim();
 }
 
-// ---------- Helpers: domain
-function loadFixturesForWeek(week) {
-  const all = readJSON(FIXTURES_PATH, {});
-  return all[String(week)];
+// Load players for optional PIN validation
+function loadPlayersMap() {
+  const arr = readJsonFlexible(PLAYERS_PATH, []) || [];
+  const map = new Map();
+  for (const item of arr) {
+    if (typeof item === 'string') {
+      map.set(item.trim().toLowerCase(), { name: item.trim(), email: '' });
+    } else if (item && item.name) {
+      map.set(item.name.trim().toLowerCase(), item);
+    }
+  }
+  return map;
 }
-function isLocked(kickoffISO) {
-  if (DEV_BYPASS_LOCK) return false;
-  if (!kickoffISO) return false; // choose strict=true if you prefer locking when missing
-  const ko = Date.parse(kickoffISO);
-  if (Number.isNaN(ko)) return false;
-  return Date.now() >= ko;
+
+// Shape predictions storage canonically as: { [week]: { [playerName]: [ { fixture_id, home, away } ] } }
+function loadPredictionsCanonical() {
+  const raw = readJsonFlexible(PREDICTIONS_PATH, {});
+  const canon = {};
+
+  // Case A: object keyed by week: { "1":[...], "2":[...] }
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    for (const [w, arr] of Object.entries(raw)) {
+      if (!Array.isArray(arr)) continue;
+      canon[w] = canon[w] || {};
+      for (const rec of arr) {
+        const name = normalizeName(rec.playerName || rec.name || '');
+        if (!name) continue;
+        canon[w][name] = canon[w][name] || [];
+        // keep minimal fields; copy unknowns through to be safe
+        canon[w][name].push({ ...rec });
+      }
+    }
+    return canon;
+  }
+
+  // Case B: array of rows with week+playerName
+  if (Array.isArray(raw)) {
+    for (const rec of raw) {
+      const w = String(rec.week ?? '');
+      const name = normalizeName(rec.playerName || rec.name || '');
+      if (!w || !name) continue;
+      canon[w] = canon[w] || {};
+      canon[w][name] = canon[w][name] || [];
+      canon[w][name].push({ ...rec });
+    }
+    return canon;
+  }
+
+  // Otherwise empty
+  return {};
 }
+
+function dumpPredictionsFromCanonical(canon) {
+  // Save back in a simple keyed-by-week array form to avoid blowing up file size:
+  // { "1": [ ... ], "2": [ ... ] }
+  const out = {};
+  for (const [w, byPlayer] of Object.entries(canon)) {
+    out[w] = out[w] || [];
+    for (const [name, rows] of Object.entries(byPlayer)) {
+      for (const rec of rows) {
+        out[w].push({ playerName: name, ...rec });
+      }
+    }
+  }
+  writeJsonPretty(PREDICTIONS_PATH, out);
+}
+
+// Basic predictions payload validator
 function validatePredictionsArray(arr) {
-  if (!Array.isArray(arr)) return "predictions must be an array";
+  if (!Array.isArray(arr) || arr.length === 0) {
+    return 'predictions must be a non-empty array';
+  }
   for (const p of arr) {
-    if (!p || typeof p !== "object") return "each prediction must be an object";
-    if (!p.fixture_id || typeof p.fixture_id !== "string") return "missing fixture_id";
-    if (!Number.isInteger(p.home) || p.home < 0) return "home must be an integer ≥ 0";
-    if (!Number.isInteger(p.away) || p.away < 0) return "away must be an integer ≥ 0";
+    if (p == null || typeof p !== 'object') return 'prediction entries must be objects';
+    if (p.fixture_id == null) return 'each prediction requires fixture_id';
+    // Optional score fields; allow strings or numbers
   }
   return null;
 }
-function normalizePlayerName(name) {
-  return String(name || "").trim();
-}
-function hashKey(input) {
-  return crypto.createHash("sha1").update(String(input)).digest("hex");
-}
 
-// Optional PIN check (no-op by default)
-function verifyPinIfRequired(playerName, pin) {
-  if (!REQUIRE_PIN) return true; // disabled
-  const players = readJSON(PLAYERS_PATH, {}); // shape suggestion: { players: [{name, pin}], ... }
-  const list = Array.isArray(players.players) ? players.players : [];
-  const found = list.find(p => (p.name || "").toLowerCase() === (playerName || "").toLowerCase());
-  if (!found) return false;
-  return String(found.pin) === String(pin);
-}
+// Optional PIN verify (only if REQUIRE_PIN=1)
+async function verifyPinIfRequired(playerName, pin) {
+  if (!REQUIRE_PIN) return null; // no error
+  if (!pin) return 'PIN required';
 
-// ---------- Data shape for predictions.json (recommended)
-// {
-//   "1": {
-//     "Vince": [
-//       { "fixture_id": "W1-M1", "home": 1, "away": 0, "saved_at": "ISO" },
-//       ...
-//     ],
-//     "Toby": [ ... ]
-//   },
-//   "2": { ... }
-// }
-function loadPredictions() {
-  return readJSON(PREDICTIONS_PATH, {});
-}
-function savePredictions(obj) {
-  atomicWriteJSON(PREDICTIONS_PATH, obj);
+  const players = loadPlayersMap();
+  const key = playerName.trim().toLowerCase();
+  const pl = players.get(key);
+  if (!pl) return 'Unknown player';
+
+  // Accept either plaintext pin stored as "pin" OR hashed pin as "pinHash"
+  if (pl.pinHash) {
+    const ok = await bcrypt.compare(String(pin), String(pl.pinHash));
+    return ok ? null : 'Invalid PIN';
+  }
+  if (pl.pin) {
+    return String(pl.pin) === String(pin) ? null : 'Invalid PIN';
+  }
+  // If no pin on record, treat as failure (or change to allow if desired)
+  return 'PIN not set for this player';
 }
 
-// ---------- GET /api/predictions?week=1&player=Vince
-// Returns stored predictions for a given week/player
-router.get("/", (req, res) => {
-  const week = String(req.query.week || "").trim();
-  const player = normalizePlayerName(req.query.player);
+// ------------------- Routes -------------------
 
-  if (!week)  return res.status(400).json({ error: "Missing week" });
-  if (!player) return res.status(400).json({ error: "Missing player" });
+/**
+ * Get current user's predictions for a week
+ * GET /predictions/mine?week=1&player=Vince
+ */
+router.get('/mine', (req, res) => {
+  const week = String(req.query.week || '');
+  const player = normalizeName(req.query.player);
+  if (!week) return res.status(400).json({ error: 'week required' });
+  if (!player) return res.status(400).json({ error: 'player required' });
 
-  const all = loadPredictions();
-  const byWeek = all[week] || {};
-  const entries = byWeek[player] || [];
-
-  return res.json({ week, player, predictions: entries });
+  const canon = loadPredictionsCanonical();
+  const rows = (canon[week]?.[player]) || [];
+  res.json({ week: Number(week), player, predictions: rows });
 });
 
-// ---------- POST /api/predictions/save
-// Body:
-// {
-//   "week": "1",
-//   "player": "Vince",
-//   "pin": "1111"                 (optional: only checked if REQUIRE_PIN=1)
-//   "predictions": [
-//     {"fixture_id":"W1-M1","home":1,"away":1},
-//     ...
-//   ]
-// }
-router.post("/save", express.json(), (req, res) => {
-  const { week, player, pin, predictions } = req.body || {};
-  if (!week)  return res.status(400).json({ error: "week required" });
+/**
+ * Save predictions (creates/overwrites only the fixtures present in payload)
+ * POST /predictions/save
+ * body: { week, player, pin?, predictions: [{ fixture_id, home, away, ... }] }
+ */
+router.post('/save', express.json(), async (req, res) => {
+  try {
+    const { week, player, pin, predictions } = req.body || {};
+    if (!week)  return res.status(400).json({ error: 'week required' });
+    if (!player) return res.status(400).json({ error: 'player required' });
 
-  const playerName = normalizePlayerName(player);
-  if (!playerName) return res.status(400).json({ error: "player required" });
+    const playerName = normalizeName(player);
 
-  // Optional PIN check
-  if (!verifyPinIfRequired(playerName, pin)) {
-    return res.status(401).json({ error: "Invalid PIN or player" });
-  }
+    // Optional PIN check
+    const pinErr = await verifyPinIfRequired(playerName, pin);
+    if (pinErr) return res.status(401).json({ error: pinErr });
 
-  // Validate predictions array
-  const err = validatePredictionsArray(predictions);
-  if (err) return res.status(400).json({ error: err });
+    // Validate predictions payload
+    const err = validatePredictionsArray(predictions);
+    if (err) return res.status(400).json({ error: err });
 
-  // Load fixtures for lock checks
-  const fixtures = loadFixturesForWeek(week);
-  if (!fixtures) return res.status(400).json({ error: "Unknown week" });
+    // Load fixtures for lock checks
+    const fx = loadFixturesForWeek(week);
+    if (!fx || !fx.length) return res.status(400).json({ error: 'Unknown week' });
 
-  const kickoffMap = new Map(fixtures.map(f => [f.id, f.kickoff]));
+    // Build map: fixture_id -> kickoff (ISO)
+    const kickoffMap = new Map(
+      fx.map(f => [String(f.id ?? f.fixture_id), f.kickoff])
+    );
 
-  // Enforce lock: if any prediction's fixture is past kickoff → reject
-  for (const p of predictions) {
-    const ko = kickoffMap.get(p.fixture_id);
-    if (isLocked(ko)) {
-      return res.status(423).json({
-        error: "Predictions closed for one or more fixtures",
-        fixture_id: p.fixture_id,
-        kickoff: ko || null
-      });
+    // Enforce lock unless explicitly bypassed for dev
+    if (!DEV_BYPASS_LOCK) {
+      for (const p of predictions) {
+        const ko = kickoffMap.get(String(p.fixture_id));
+        if (!ko || Number.isNaN(new Date(ko).getTime())) {
+          return res.status(400).json({ error: 'Unknown or invalid fixture kickoff', fixture_id: p.fixture_id });
+        }
+        if (isLocked(ko)) {
+          return res.status(403).json({
+            error: 'Predictions closed for one or more fixtures',
+            fixture_id: p.fixture_id,
+            kickoff: new Date(ko).toISOString(),
+          });
+        }
+      }
     }
+
+    // Merge/upsert predictions for this player & week
+    const canon = loadPredictionsCanonical();
+    const w = String(week);
+    canon[w] = canon[w] || {};
+    const existing = new Map((canon[w][playerName] || []).map(e => [String(e.fixture_id), e]));
+
+    const nowISO = new Date().toISOString();
+
+    for (const p of predictions) {
+      const k = String(p.fixture_id);
+      const merged = { ...(existing.get(k) || {}), ...p, updated_at: nowISO, playerName };
+      existing.set(k, merged);
+    }
+
+    canon[w][playerName] = Array.from(existing.values());
+
+    // Persist
+    dumpPredictionsFromCanonical(canon);
+
+    return res.json({ ok: true, saved: predictions.length });
+  } catch (e) {
+    console.error('[predictions/save] error', e);
+    return res.status(500).json({ error: 'server_error' });
   }
-
-  // Merge/upsert predictions for this player & week
-  const all = loadPredictions();
-  if (!all[week]) all[week] = {};
-
-  // Keep any existing predictions that are for fixtures NOT in this payload
-  const existing = Array.isArray(all[week][playerName]) ? all[week][playerName] : [];
-  const existingMap = new Map(existing.map(e => [e.fixture_id, e]));
-
-  const nowISO = new Date().toISOString();
-  for (const p of predictions) {
-    existingMap.set(p.fixture_id, {
-      fixture_id: p.fixture_id,
-      home: p.home,
-      away: p.away,
-      saved_at: nowISO
-    });
-  }
-
-  // Persist back in stable order (by fixture_id)
-  const merged = Array.from(existingMap.values()).sort((a, b) =>
-    a.fixture_id.localeCompare(b.fixture_id)
-  );
-  all[week][playerName] = merged;
-
-  savePredictions(all);
-
-  return res.json({
-    ok: true,
-    week: String(week),
-    player: playerName,
-    count: merged.length,
-    saved: predictions.length,
-    dev_bypass_lock: DEV_BYPASS_LOCK
-  });
 });
 
 module.exports = router;
