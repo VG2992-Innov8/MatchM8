@@ -8,3 +8,6 @@ Thumbs.db
 .idea/ 
 package.broken.json
 season_scores.csv    # remove if you want to track it
+/outbox/
+/logs/
+.env

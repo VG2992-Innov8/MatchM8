@@ -1,231 +1,136 @@
-// routes/predictions.js
-// Express router for MatchM8 predictions (per-fixture lock inside the handler)
-
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
-const bcrypt = require('bcryptjs');
-
 const router = express.Router();
 
 const { loadFixturesForWeek } = require('../lib/fixtures');
 const { isLocked } = require('../lib/time');
+const { enqueueEmail } = require('../lib/mailer');
 
-// ---------- File paths
-const DATA_DIR          = path.join(__dirname, '..', 'data');
-const PREDICTIONS_PATH  = path.join(DATA_DIR, 'predictions.json');
-const PLAYERS_PATH      = path.join(DATA_DIR, 'players.json');
-
-// ---------- Env toggles
-// DEV_BYPASS_LOCK=1 to allow late predictions during local dev
-const DEV_BYPASS_LOCK   = process.env.DEV_BYPASS_LOCK === '1';
-// REQUIRE_PIN=1 to require a PIN to save predictions
-const REQUIRE_PIN       = process.env.REQUIRE_PIN === '1';
-
-// ---------- Utilities
-function readJsonFlexible(p, fallback) {
-  try {
-    if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf8'));
-  } catch {}
-  return fallback;
+function loadJson(p, fallback) {
+  try { return JSON.parse(fs.readFileSync(p, 'utf8')); }
+  catch { return fallback; }
 }
-function writeJsonPretty(p, obj) {
+function saveJson(p, obj) {
+  fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, JSON.stringify(obj, null, 2), 'utf8');
 }
-function normalizeName(s) {
-  return (s || '').trim();
+
+function getPlayerIdFromCookie(req) {
+  // You mentioned cookie is set by PIN flow; adapt as needed
+  return req.cookies?.mm8_pid || req.headers['x-player-id']; // fallback for testing
 }
 
-// Load players for optional PIN validation
-function loadPlayersMap() {
-  const arr = readJsonFlexible(PLAYERS_PATH, []) || [];
-  const map = new Map();
-  for (const item of arr) {
-    if (typeof item === 'string') {
-      map.set(item.trim().toLowerCase(), { name: item.trim(), email: '' });
-    } else if (item && item.name) {
-      map.set(item.name.trim().toLowerCase(), item);
-    }
-  }
-  return map;
+function fmt(dtIso) {
+  try { return new Date(dtIso).toLocaleString(); } catch { return dtIso; }
 }
 
-// Shape predictions storage canonically as: { [week]: { [playerName]: [ { fixture_id, home, away } ] } }
-function loadPredictionsCanonical() {
-  const raw = readJsonFlexible(PREDICTIONS_PATH, {});
-  const canon = {};
+router.get('/me', (req, res) => {
+  const week = Number(req.query.week);
+  const pid = getPlayerIdFromCookie(req);
+  if (!week || !pid) return res.status(400).json({ ok:false, error:'week and auth required' });
 
-  // Case A: object keyed by week: { "1":[...], "2":[...] }
-  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-    for (const [w, arr] of Object.entries(raw)) {
-      if (!Array.isArray(arr)) continue;
-      canon[w] = canon[w] || {};
-      for (const rec of arr) {
-        const name = normalizeName(rec.playerName || rec.name || '');
-        if (!name) continue;
-        canon[w][name] = canon[w][name] || [];
-        // keep minimal fields; copy unknowns through to be safe
-        canon[w][name].push({ ...rec });
-      }
-    }
-    return canon;
-  }
-
-  // Case B: array of rows with week+playerName
-  if (Array.isArray(raw)) {
-    for (const rec of raw) {
-      const w = String(rec.week ?? '');
-      const name = normalizeName(rec.playerName || rec.name || '');
-      if (!w || !name) continue;
-      canon[w] = canon[w] || {};
-      canon[w][name] = canon[w][name] || [];
-      canon[w][name].push({ ...rec });
-    }
-    return canon;
-  }
-
-  // Otherwise empty
-  return {};
-}
-
-function dumpPredictionsFromCanonical(canon) {
-  // Save back in a simple keyed-by-week array form to avoid blowing up file size:
-  // { "1": [ ... ], "2": [ ... ] }
-  const out = {};
-  for (const [w, byPlayer] of Object.entries(canon)) {
-    out[w] = out[w] || [];
-    for (const [name, rows] of Object.entries(byPlayer)) {
-      for (const rec of rows) {
-        out[w].push({ playerName: name, ...rec });
-      }
-    }
-  }
-  writeJsonPretty(PREDICTIONS_PATH, out);
-}
-
-// Basic predictions payload validator
-function validatePredictionsArray(arr) {
-  if (!Array.isArray(arr) || arr.length === 0) {
-    return 'predictions must be a non-empty array';
-  }
-  for (const p of arr) {
-    if (p == null || typeof p !== 'object') return 'prediction entries must be objects';
-    if (p.fixture_id == null) return 'each prediction requires fixture_id';
-    // Optional score fields; allow strings or numbers
-  }
-  return null;
-}
-
-// Optional PIN verify (only if REQUIRE_PIN=1)
-async function verifyPinIfRequired(playerName, pin) {
-  if (!REQUIRE_PIN) return null; // no error
-  if (!pin) return 'PIN required';
-
-  const players = loadPlayersMap();
-  const key = playerName.trim().toLowerCase();
-  const pl = players.get(key);
-  if (!pl) return 'Unknown player';
-
-  // Accept either plaintext pin stored as "pin" OR hashed pin as "pinHash"
-  if (pl.pinHash) {
-    const ok = await bcrypt.compare(String(pin), String(pl.pinHash));
-    return ok ? null : 'Invalid PIN';
-  }
-  if (pl.pin) {
-    return String(pl.pin) === String(pin) ? null : 'Invalid PIN';
-  }
-  // If no pin on record, treat as failure (or change to allow if desired)
-  return 'PIN not set for this player';
-}
-
-// ------------------- Routes -------------------
-
-/**
- * Get current user's predictions for a week
- * GET /predictions/mine?week=1&player=Vince
- */
-router.get('/mine', (req, res) => {
-  const week = String(req.query.week || '');
-  const player = normalizeName(req.query.player);
-  if (!week) return res.status(400).json({ error: 'week required' });
-  if (!player) return res.status(400).json({ error: 'player required' });
-
-  const canon = loadPredictionsCanonical();
-  const rows = (canon[week]?.[player]) || [];
-  res.json({ week: Number(week), player, predictions: rows });
+  const predsPath = path.join(__dirname, '..', 'data', 'predictions', `week-${week}.json`);
+  const data = loadJson(predsPath, {});
+  res.json({ ok:true, record: data[pid] || null });
 });
 
-/**
- * Save predictions (creates/overwrites only the fixtures present in payload)
- * POST /predictions/save
- * body: { week, player, pin?, predictions: [{ fixture_id, home, away, ... }] }
- */
-router.post('/save', express.json(), async (req, res) => {
+router.post('/', async (req, res) => {
+  const week = Number(req.query.week);
+  const pid = getPlayerIdFromCookie(req);
+  if (!week || !pid) return res.status(400).json({ ok:false, error:'week and auth required' });
+
+  const fixtures = loadFixturesForWeek(week) || [];
+  const byId = Object.fromEntries(fixtures.map(f => [String(f.id), f]));
+
+  const incoming = req.body?.picks || {}; // { [fixture_id]: "H/A/D" or "score" }
+  const accepted = {};
+  const rejected = {};
+
+  Object.entries(incoming).forEach(([fid, pick]) => {
+    const fx = byId[String(fid)];
+    if (!fx) { rejected[fid] = 'unknown_fixture'; return; }
+    if (isLocked(fx.kickoff_iso)) { rejected[fid] = 'locked'; return; }
+    accepted[fid] = pick;
+  });
+
+  const predsPath = path.join(__dirname, '..', 'data', 'predictions', `week-${week}.json`);
+  const existing = loadJson(predsPath, {});
+  const prev = existing[pid] || { picks: {} };
+
+  existing[pid] = {
+    ...prev,
+    picks: { ...prev.picks, ...accepted },
+    submitted_at: new Date().toISOString(),
+  };
+
+  saveJson(predsPath, existing);
+
+  // Build and enqueue email receipt if at least one accepted
+  let emailEnqueued = false;
   try {
-    const { week, player, pin, predictions } = req.body || {};
-    if (!week)  return res.status(400).json({ error: 'week required' });
-    if (!player) return res.status(400).json({ error: 'player required' });
+    if (Object.keys(accepted).length) {
+      // Load players list to find email
+      const players = loadJson(path.join(__dirname, '..', 'data', 'players.json'), []);
+      const me = players.find(p => String(p.id) === String(pid));
 
-    const playerName = normalizeName(player);
+      if (me?.email) {
+        const rows = Object.keys(accepted).map(fid => {
+          const fx = byId[fid];
+          return `<tr>
+            <td style="padding:4px 8px;border:1px solid #ddd;">${fx?.home || '?'}</td>
+            <td style="padding:4px 8px;border:1px solid #ddd;">${fx?.away || '?'}</td>
+            <td style="padding:4px 8px;border:1px solid #ddd;">${accepted[fid]}</td>
+            <td style="padding:4px 8px;border:1px solid #ddd;">${fmt(fx?.kickoff_iso)}</td>
+          </tr>`;
+        }).join('');
 
-    // Optional PIN check
-    const pinErr = await verifyPinIfRequired(playerName, pin);
-    if (pinErr) return res.status(401).json({ error: pinErr });
+        const html = `
+          <div style="font-family:system-ui,Segoe UI,Roboto,Arial;">
+            <h2>Your MatchM8 picks — Week ${week}</h2>
+            <p>Hi ${me.name || 'player'}, here’s your submission receipt. You can edit picks until each match locks.</p>
+            <table style="border-collapse:collapse;border:1px solid #ddd;">
+              <thead>
+                <tr>
+                  <th style="padding:6px 8px;border:1px solid #ddd;">Home</th>
+                  <th style="padding:6px 8px;border:1px solid #ddd;">Away</th>
+                  <th style="padding:6px 8px;border:1px solid #ddd;">Your Pick</th>
+                  <th style="padding:6px 8px;border:1px solid #ddd;">Kickoff (local)</th>
+                </tr>
+              </thead>
+              <tbody>${rows}</tbody>
+            </table>
+            <p style="color:#666">Submitted: ${fmt(existing[pid].submitted_at)}</p>
+          </div>
+        `;
 
-    // Validate predictions payload
-    const err = validatePredictionsArray(predictions);
-    if (err) return res.status(400).json({ error: err });
+        const text = `Your MatchM8 picks — Week ${week}
+${Object.keys(accepted).map(fid => {
+  const fx = byId[fid];
+  return `${fx?.home || '?'} vs ${fx?.away || '?'} | Pick: ${accepted[fid]} | Kickoff: ${fmt(fx?.kickoff_iso)}`;
+}).join('\n')}
+Submitted: ${fmt(existing[pid].submitted_at)}`;
 
-    // Load fixtures for lock checks
-    const fx = loadFixturesForWeek(week);
-    if (!fx || !fx.length) return res.status(400).json({ error: 'Unknown week' });
+        await enqueueEmail({
+          to: me.email,
+          subject: `Your MatchM8 picks for Week ${week}`,
+          html, text,
+          meta: { kind: 'receipt', week, player_id: pid }
+        });
 
-    // Build map: fixture_id -> kickoff (ISO)
-    const kickoffMap = new Map(
-      fx.map(f => [String(f.id ?? f.fixture_id), f.kickoff])
-    );
+        // Stamp email_sent_at
+        const updated = loadJson(predsPath, {});
+        updated[pid] = { ...updated[pid], email_sent_at: new Date().toISOString() };
+        saveJson(predsPath, updated);
 
-    // Enforce lock unless explicitly bypassed for dev
-    if (!DEV_BYPASS_LOCK) {
-      for (const p of predictions) {
-        const ko = kickoffMap.get(String(p.fixture_id));
-        if (!ko || Number.isNaN(new Date(ko).getTime())) {
-          return res.status(400).json({ error: 'Unknown or invalid fixture kickoff', fixture_id: p.fixture_id });
-        }
-        if (isLocked(ko)) {
-          return res.status(403).json({
-            error: 'Predictions closed for one or more fixtures',
-            fixture_id: p.fixture_id,
-            kickoff: new Date(ko).toISOString(),
-          });
-        }
+        emailEnqueued = true;
       }
     }
-
-    // Merge/upsert predictions for this player & week
-    const canon = loadPredictionsCanonical();
-    const w = String(week);
-    canon[w] = canon[w] || {};
-    const existing = new Map((canon[w][playerName] || []).map(e => [String(e.fixture_id), e]));
-
-    const nowISO = new Date().toISOString();
-
-    for (const p of predictions) {
-      const k = String(p.fixture_id);
-      const merged = { ...(existing.get(k) || {}), ...p, updated_at: nowISO, playerName };
-      existing.set(k, merged);
-    }
-
-    canon[w][playerName] = Array.from(existing.values());
-
-    // Persist
-    dumpPredictionsFromCanonical(canon);
-
-    return res.json({ ok: true, saved: predictions.length });
   } catch (e) {
-    console.error('[predictions/save] error', e);
-    return res.status(500).json({ error: 'server_error' });
+    console.error('enqueue email failed:', e.message);
   }
+
+  res.json({ ok: true, accepted, rejected, email_enqueued: emailEnqueued });
 });
 
 module.exports = router;
