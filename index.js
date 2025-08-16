@@ -1,11 +1,15 @@
 // index.js (safe-boot)
 const express = require('express');
 const path = require('path');
+const cookieParser = require('cookie-parser');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
+app.use(cookieParser());
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: false }));
+
 
 // Fix legacy encoded ? and &
 app.use((req, res, next) => {
@@ -18,6 +22,25 @@ app.use((req, res, next) => {
 
 // Static
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Static UI (summary page)
+app.use('/ui', express.static(path.join(__dirname, 'ui')));
+
+// Admin auth routes
+const adminRoutes = require('./routes/admin');
+app.use('/admin', adminRoutes);
+
+// Protect admin-only routes (example: scores/results routers)
+try {
+  const requireAdmin = require('./middleware/requireAdmin');
+  const scoresRouter = require('./routes/scores');
+  app.use('/scores', requireAdmin, scoresRouter);
+  app.use('/api/scores', requireAdmin, scoresRouter);
+} catch (_) { /* ignore if you don’t have these yet */ }
+
+// Reminder job (runs daily 09:00, respects env)
+const { scheduleReminders } = require('./jobs/reminders');
+scheduleReminders();
 
 // ---------- Safe require + mount helpers
 const mounted = [];
