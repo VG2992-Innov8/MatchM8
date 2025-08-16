@@ -6,4 +6,5 @@ logs/
 Thumbs.db 
 .vscode/ 
 .idea/ 
+package.broken.json
 season_scores.csv    # remove if you want to track it
