@@ -8,6 +8,7 @@ const cookieParser = require('cookie-parser');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const adminRouter = require('./routes/admin');
 
 // ---- Global middleware
 app.use(cors());
@@ -29,24 +30,8 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Static UI (summary page)
 app.use('/ui', express.static(path.join(__dirname, 'ui')));
 
-// ---- Admin auth routes (optional)
-// If your routes/admin.js doesn’t export a router yet, this will be skipped
-try {
-  // Option A: admin.js exports a router directly
-  const adminRoutes = require('./routes/admin');
-  if (typeof adminRoutes === 'function' || adminRoutes?.use) {
-    app.use('/admin', adminRoutes);
-    console.log('[BOOT] admin routes mounted at /admin');
-  } else if (adminRoutes?.router) {
-    // Option B: admin.js exports { router }
-    app.use('/admin', adminRoutes.router);
-    console.log('[BOOT] admin routes mounted at /admin (named export)');
-  } else {
-    throw new Error('export missing');
-  }
-} catch (e) {
-  console.error('[BOOT] admin routes FAILED:', e.message || e);
-}
+app.use('/api/admin', adminRouter);
+console.log('[BOOT] admin routes mounted at /api/admin');
 
 // ---- Reminder job (optional)
 try {

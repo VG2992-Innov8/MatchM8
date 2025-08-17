@@ -1,8 +1,0 @@
-week,player_id,player_name,points,exact_hits,result_hits,scored_fixtures,total_fixtures,timestamp
-3,1,Toby,7,1,1,2,2,2025-08-14T11:41:02.564Z
-3,1,Toby,7,1,1,2,2,2025-08-14T11:49:40.178Z
-3,undefined,Player undefined,7,1,1,2,2,2025-08-14T11:49:40.178Z
-3,1,Toby,7,1,1,2,2,2025-08-14T11:50:06.875Z
-3,undefined,Player undefined,4,0,2,2,2,2025-08-14T11:50:06.875Z
-3,1,"Toby",10,2,0,2025-08-14T13:03:27.644Z
-3,undefined,"Player undefined",4,0,2,2025-08-14T13:03:27.644Z

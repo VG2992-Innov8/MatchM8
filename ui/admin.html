@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>MatchM8 — Admin</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { --border:#ddd; --muted:#666; --ok:#155724; --okbg:#e6f4ea; --err:#9b1c1c; --errbg:#fde8e8; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; color:#111; }
+    h1 { margin: 0 0 16px; }
+    .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+    .card { border:1px solid var(--border); border-radius:12px; padding:16px; background:#fff; margin-bottom:12px; }
+    .muted { color: var(--muted); }
+    input[type="number"] { width:80px; padding:6px 8px; border:1px solid var(--border); border-radius:8px; }
+    input[type="text"], textarea { width:100%; padding:8px; border:1px solid var(--border); border-radius:8px; font-family:inherit; }
+    button { padding:9px 14px; border:1px solid var(--border); border-radius:10px; background:#fafafa; cursor:pointer; }
+    button:disabled { opacity:.6; cursor:not-allowed; }
+    table { width:100%; border-collapse: collapse; }
+    th, td { border:1px solid var(--border); padding:8px; text-align:left; }
+    .banner { display:none; margin: 8px 0 16px; padding:10px 12px; border-radius:10px; border:1px solid #b7e1b7; background: var(--okbg); color: var(--ok); }
+    .err { display:none; margin: 8px 0 16px; padding:10px 12px; border-radius:10px; border:1px solid #f5b5b5; background: var(--errbg); color: var(--err); }
+    .grid { display:grid; grid-template-columns: 1fr; gap:12px; }
+    @media (min-width: 1000px) { .grid { grid-template-columns: 1.1fr 0.9fr; } }
+    small { color:var(--muted); }
+  </style>
+</head>
+<body>
+  <h1>Admin — Week <span id="wk">?</span></h1>
+  <div class="row" style="margin-bottom:8px;">
+    <label>Week:
+      <input id="weekInput" type="number" min="1" step="1" style="width:90px; padding:6px 8px; border:1px solid var(--border); border-radius:8px;">
+    </label>
+    <button id="btnLoad">Load Preview</button>
+    <button id="btnCompute">Compute Scores</button>
+    <span id="csvHint" class="muted"></span>
+  </div>
+
+  <div id="ok" class="banner"></div>
+  <div id="err" class="err"></div>
+
+  <div class="grid">
+    <!-- Fixtures + Results -->
+    <div class="card">
+      <h3 style="margin-top:0;">Fixtures & Results</h3>
+      <div id="fixturesWrap" class="muted">No fixtures yet. Import on the right →</div>
+      <div style="margin-top:10px;">
+        <button id="btnSaveResults">Save Results</button>
+        <small class="muted">Enter goals and click Save. Then press Compute Scores.</small>
+      </div>
+    </div>
+
+    <!-- Import + Leaderboard -->
+    <div class="card">
+      <h3 style="margin-top:0;">Import Fixtures</h3>
+      <div class="row">
+        <input type="file" id="csvFile" accept=".csv,text/csv">
+        <button id="btnImportCsv">Import CSV</button>
+      </div>
+      <small class="muted">CSV headers: <code>id,home,away,kickoff_iso</code></small>
+      <hr style="border:none; border-top:1px solid var(--border); margin:12px 0;">
+      <small class="muted">Or paste JSON (either <code>[...]</code> or <code>{ fixtures:[...] }</code>)</small>
+      <textarea id="jsonText" rows="6" placeholder='[{"id":"1","home":"Arsenal","away":"Leeds","kickoff_iso":"2025-08-20T19:00:00Z"}]'></textarea>
+      <div class="row" style="margin-top:8px;">
+        <button id="btnImportJson">Import JSON</button>
+        <button id="btnSeed">Quick Seed 2 Future Fixtures</button>
+      </div>
+
+      <hr style="border:none; border-top:1px solid var(--border); margin:12px 0;">
+      <h3 style="margin-top:0;">Leaderboard (after compute)</h3>
+      <div id="leaderboard" class="muted">Run “Compute Scores” to refresh.</div>
+    </div>
+  </div>
+
+  <script>
+    // ---------- helpers ----------
+    const qs = new URLSearchParams(location.search);
+    let week = Number(qs.get('week') || 1);
+    const wkEl = document.getElementById('wk');
+    const weekInput = document.getElementById('weekInput');
+    function setWeek(n){ week = Number(n)||1; wkEl.textContent = week; weekInput.value = week; history.replaceState(null, '', `?week=${week}`); }
+    setWeek(week);
+
+    function fmt(dt){ const d=new Date(dt); return isNaN(d)? '-' : d.toLocaleString(); }
+    function ok(msg){ const e=document.getElementById('ok'); e.textContent=msg; e.style.display='block'; document.getElementById('err').style.display='none'; }
+    function err(msg){ const e=document.getElementById('err'); e.textContent=msg; e.style.display='block'; document.getElementById('ok').style.display='none'; }
+    function el(id){ return document.getElementById(id); }
+
+    // ---------- preview / render ----------
+    let PREVIEW = { fixtures:[], results:{}, predictions:{} };
+
+    async function loadPreview(){
+      try{
+        const r = await fetch(`/api/admin/preview?week=${week}`);
+        const j = await r.json();
+        if(!r.ok || !j.ok){ err(j.error || 'Failed to load preview'); return; }
+        PREVIEW = j;
+        renderFixtures();
+      }catch(e){ err('Network error while loading preview'); }
+    }
+
+    function renderFixtures(){
+      const wrap = el('fixturesWrap');
+      const fx = PREVIEW.fixtures || [];
+      if(!fx.length){ wrap.innerHTML = '<span class="muted">No fixtures yet.</span>'; return; }
+      let html = `<table><thead><tr>
+        <th>Id</th><th>Home</th><th>Away</th><th>Kickoff</th><th>HG</th><th>AG</th>
+      </tr></thead><tbody>`;
+      fx.forEach(f=>{
+        const r = (PREVIEW.results||{})[String(f.id)] || {};
+        html += `<tr>
+          <td>${f.id}</td>
+          <td>${f.home}</td>
+          <td>${f.away}</td>
+          <td>${fmt(f.kickoff_iso || f.kickoff)}</td>
+          <td><input type="number" min="0" id="hg-${f.id}" value="${Number.isFinite(r.homeGoals)? r.homeGoals : ''}"></td>
+          <td><input type="number" min="0" id="ag-${f.id}" value="${Number.isFinite(r.awayGoals)? r.awayGoals : ''}"></td>
+        </tr>`;
+      });
+      html += `</tbody></table>`;
+      wrap.innerHTML = html;
+    }
+
+    // ---------- import fixtures ----------
+    async function importCsv(){
+      const f = el('csvFile').files[0];
+      if(!f){ err('Choose a CSV file first.'); return; }
+      const text = await f.text();
+      const r = await fetch(`/api/admin/fixtures/import?week=${week}`, {
+        method:'POST',
+        headers:{ 'content-type':'text/csv' },
+        body: text
+      });
+      const j = await r.json();
+      if(!r.ok || !j.ok){ err(j.error || 'Import failed'); return; }
+      ok(`Imported ${j.saved} fixtures for week ${j.week}.`);
+      loadPreview();
+    }
+
+    async function importJson(){
+      let data;
+      try{
+        data = JSON.parse(el('jsonText').value.trim());
+      }catch(e){ err('JSON parse error'); return; }
+      const fixtures = Array.isArray(data) ? data : (Array.isArray(data.fixtures) ? data.fixtures : null);
+      if(!fixtures){ err('JSON must be an array or { fixtures: [...] }'); return; }
+      const r = await fetch(`/api/admin/fixtures/import?week=${week}`, {
+        method:'POST',
+        headers:{ 'content-type':'application/json' },
+        body: JSON.stringify({ fixtures })
+      });
+      const j = await r.json();
+      if(!r.ok || !j.ok){ err(j.error || 'Import failed'); return; }
+      ok(`Imported ${j.saved} fixtures for week ${j.week}.`);
+      loadPreview();
+    }
+
+    async function seedTwo(){
+      const now = Date.now();
+      const fixtures = [
+        { id:"1", home:"Arsenal", away:"Leeds", kickoff_iso:new Date(now+60*60*1000).toISOString() },
+        { id:"2", home:"Spurs",   away:"Brentford", kickoff_iso:new Date(now+2*60*60*1000).toISOString() }
+      ];
+      el('jsonText').value = JSON.stringify(fixtures, null, 2);
+      importJson();
+    }
+
+    // ---------- save results ----------
+    async function saveResults(){
+      const fx = PREVIEW.fixtures || [];
+      if(!fx.length){ err('No fixtures to save results for.'); return; }
+      const results = {};
+      fx.forEach(f=>{
+        const hg = Number(el(`hg-${f.id}`).value);
+        const ag = Number(el(`ag-${f.id}`).value);
+        if(Number.isFinite(hg) && Number.isFinite(ag)){
+          results[String(f.id)] = { homeGoals:hg, awayGoals:ag };
+        }
+      });
+      if(!Object.keys(results).length){ err('Enter some scores first.'); return; }
+
+      const r = await fetch(`/api/admin/results?week=${week}`, {
+        method:'POST',
+        headers:{ 'content-type':'application/json' },
+        body: JSON.stringify({ results })
+      });
+      const j = await r.json();
+      if(!r.ok || !j.ok){ err(j.error || 'Saving results failed'); return; }
+      ok(`Saved results for ${j.saved} fixture(s).`);
+      loadPreview();
+    }
+
+    // ---------- compute scores ----------
+    async function compute(){
+      const r = await fetch(`/api/admin/scores/compute?week=${week}`, { method:'POST' });
+      const j = await r.json();
+      if(!r.ok || !j.ok){ err(j.error || 'Compute failed'); return; }
+      ok(`Scores computed for week ${j.week}.`);
+      el('csvHint').textContent = `CSV: ${j.csv || 'data/season_scores.csv'}`;
+      // render leaderboard
+      const rows = j.leaderboard || [];
+      if(!rows.length){ el('leaderboard').textContent = 'No data yet.'; return; }
+      let html = '<table><thead><tr><th>Player</th><th>Total</th></tr></thead><tbody>';
+      rows.forEach(r=>{ html += `<tr><td>${r.name}</td><td>${r.total}</td></tr>`; });
+      html += '</tbody></table>';
+      el('leaderboard').innerHTML = html;
+    }
+
+    // ---------- events ----------
+    el('btnLoad').addEventListener('click', ()=>{ setWeek(weekInput.value); loadPreview(); });
+    el('btnImportCsv').addEventListener('click', importCsv);
+    el('btnImportJson').addEventListener('click', importJson);
+    el('btnSeed').addEventListener('click', seedTwo);
+    el('btnSaveResults').addEventListener('click', saveResults);
+    el('btnCompute').addEventListener('click', compute);
+
+    // auto-load on first visit
+    loadPreview();
+  </script>
+</body>
+</html>

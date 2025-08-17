@@ -5,31 +5,26 @@ const path = require('path');
 
 const router = express.Router();
 
-// ---------- utils ----------
-function loadJson(p, fallback) {
+// ---------- helpers ----------
+function readJson(p, fallback = null) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); }
   catch { return fallback; }
 }
-function saveJson(p, obj) {
+function writeJson(p, obj) {
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, JSON.stringify(obj, null, 2), 'utf8');
 }
 function toCSV(rows) {
   if (!rows.length) return '';
   const headers = Object.keys(rows[0]);
-  const esc = v => String(v ?? '')
-    .replace(/"/g, '""')
-    .replace(/\r?\n/g, ' ');
-  return [
-    headers.join(','),
-    ...rows.map(r => headers.map(h => `"${esc(r[h])}"`).join(',')),
-  ].join('\n');
+  const esc = v => String(v ?? '').replace(/"/g, '""').replace(/\r?\n/g, ' ');
+  return [headers.join(','), ...rows.map(r => headers.map(h => `"${esc(r[h])}"`).join(','))].join('\n');
 }
 function parseCsv(text) {
-  // very small CSV parser for Admin import: header, comma, no quotes nesting
+  // lightweight CSV: comma-separated, simple quotes; good enough for admin imports
   const lines = text.trim().split(/\r?\n/);
   const headers = lines.shift().split(',').map(s => s.trim());
-  return lines.map(line => {
+  return lines.filter(Boolean).map(line => {
     const cols = line.split(',').map(s => s.trim());
     const obj = {};
     headers.forEach((h, i) => obj[h] = cols[i]);
@@ -42,7 +37,6 @@ function resultFromGoals(h, a) {
   return 'D';
 }
 function resultFromPick(pick) {
-  // supports "H/D/A" or "2-1" style exact-score
   if (/^[HDA]$/.test(String(pick))) return pick;
   const m = String(pick).match(/^(\d+)\s*-\s*(\d+)$/);
   if (!m) return null;
@@ -50,38 +44,32 @@ function resultFromPick(pick) {
   return resultFromGoals(h, a);
 }
 
-// ---------- config-ish ----------
+// ---------- config & paths ----------
 const SEASON = String(process.env.SEASON || '2025');
 
-// data paths
-const playersPath = path.join(__dirname, '..', 'data', 'players.json');
-const fixturesPath = (week) =>
-  path.join(__dirname, '..', 'data', 'fixtures', `season-${SEASON}`, `week-${week}.json`);
-const resultsPath = (week) =>
-  path.join(__dirname, '..', 'data', 'results', `week-${week}.json`);
-const predictionsPath = (week) =>
-  path.join(__dirname, '..', 'data', 'predictions', `week-${week}.json`);
-const totalsJsonPath = path.join(__dirname, '..', 'data', 'season_totals.json');
-const totalsCsvPath  = path.join(__dirname, '..', 'data', 'season_scores.csv');
+const playersPath   = path.join(__dirname, '..', 'data', 'players.json');
+const fixturesPath  = (week) => path.join(__dirname, '..', 'data', 'fixtures', `season-${SEASON}`, `week-${week}.json`);
+const resultsPath   = (week) => path.join(__dirname, '..', 'data', 'results',  `week-${week}.json`);
+const predsPath     = (week) => path.join(__dirname, '..', 'data', 'predictions', `week-${week}.json`);
+const totalsJson    = path.join(__dirname, '..', 'data', 'season_totals.json');
+const totalsCsv     = path.join(__dirname, '..', 'data', 'season_scores.csv');
 
-// ---------- middleware ----------
+// ---------- body parsers (local to this router) ----------
 router.use(express.json({ limit: '1mb' }));
 router.use(express.text({ type: ['text/*', 'text/csv'], limit: '1mb' }));
 
 // ---------- 1) Import fixtures ----------
-//
 // POST /api/admin/fixtures/import?week=1
-// Body (choose one):
-//  - JSON: { fixtures: [{id, home, away, kickoff_iso}, ...] }
-//  - text/csv: id,home,away,kickoff_iso\n1,Arsenal,Leeds,2025-08-20T19:00:00Z\n...
-//
+// Body: either { fixtures:[{id,home,away,kickoff_iso}, ...] } (JSON)
+//   or raw CSV text with headers: id,home,away,kickoff_iso
 router.post('/fixtures/import', (req, res) => {
   const week = Number(req.query.week || req.body.week);
   if (!week) return res.status(400).json({ ok:false, error:'week required' });
 
   let fixtures = [];
   if (req.is('application/json')) {
-    fixtures = Array.isArray(req.body?.fixtures) ? req.body.fixtures : [];
+    fixtures = Array.isArray(req.body?.fixtures) ? req.body.fixtures
+             : (Array.isArray(req.body) ? req.body : []);
   } else if (req.is('text/*')) {
     const rows = parseCsv(String(req.body));
     fixtures = rows.map(r => ({
@@ -94,145 +82,120 @@ router.post('/fixtures/import', (req, res) => {
 
   if (!fixtures.length) return res.status(400).json({ ok:false, error:'no fixtures provided' });
 
-  // normalize ids as strings
-  fixtures = fixtures.map(f => ({
-    id: String(f.id),
+  fixtures = fixtures.map((f, i) => ({
+    id: String(f.id ?? `${week}-${i+1}`),
     home: f.home,
     away: f.away,
     kickoff_iso: f.kickoff_iso || null,
   }));
 
-  saveJson(fixturesPath(week), fixtures);
+  writeJson(fixturesPath(week), fixtures);
   return res.json({ ok:true, saved: fixtures.length, week });
 });
 
-// ---------- 2) Enter results ----------
-//
+// ---------- 2) Save results ----------
 // POST /api/admin/results?week=1
-// Body JSON (choose one):
-//  a) { results: { "1": {homeGoals:2, awayGoals:1}, "2": {...} } }
-//  b) { results: [ { id:"1", homeGoals:2, awayGoals:1 }, ... ] }
-//
+// Body JSON:
+//   { results: { "1": {homeGoals:2, awayGoals:1}, ... } }
+//   or { results: [ {id:"1", homeGoals:2, awayGoals:1}, ... ] }
 router.post('/results', (req, res) => {
   const week = Number(req.query.week || req.body.week);
   if (!week) return res.status(400).json({ ok:false, error:'week required' });
 
-  let incoming = req.body?.results;
+  const incoming = req.body?.results;
   if (!incoming) return res.status(400).json({ ok:false, error:'results required' });
 
   const map = {};
   if (Array.isArray(incoming)) {
     incoming.forEach(r => {
       if (!r) return;
-      map[String(r.id)] = {
-        homeGoals: Number(r.homeGoals),
-        awayGoals: Number(r.awayGoals),
-        result: resultFromGoals(Number(r.homeGoals), Number(r.awayGoals)),
-      };
+      const hg = Number(r.homeGoals), ag = Number(r.awayGoals);
+      map[String(r.id)] = { homeGoals: hg, awayGoals: ag, result: resultFromGoals(hg, ag) };
     });
   } else {
     Object.entries(incoming).forEach(([id, r]) => {
-      map[String(id)] = {
-        homeGoals: Number(r.homeGoals),
-        awayGoals: Number(r.awayGoals),
-        result: resultFromGoals(Number(r.homeGoals), Number(r.awayGoals)),
-      };
+      const hg = Number(r.homeGoals), ag = Number(r.awayGoals);
+      map[String(id)] = { homeGoals: hg, awayGoals: ag, result: resultFromGoals(hg, ag) };
     });
   }
 
-  saveJson(resultsPath(week), map);
+  writeJson(resultsPath(week), map);
   return res.json({ ok:true, saved: Object.keys(map).length, week });
 });
 
 // ---------- 3) Compute scores (5/2/0) ----------
-//
 // POST /api/admin/scores/compute?week=1
-// Reads predictions + results, writes/updates season_totals.json and season_scores.csv
-//
 router.post('/scores/compute', (req, res) => {
   const week = Number(req.query.week || req.body.week);
   if (!week) return res.status(400).json({ ok:false, error:'week required' });
 
-  const players = loadJson(playersPath, []);
-  const preds = loadJson(predictionsPath(week), {});
-  const resMap = loadJson(resultsPath(week), {});
+  const players = readJson(playersPath, []);
+  const preds   = readJson(predsPath(week), {});
+  const results = readJson(resultsPath(week), {});
 
-  // compute points per player for this week
-  const weekly = {}; // { player_id: points }
+  // per-player points this week
+  const weekly = {};
   for (const [pid, rec] of Object.entries(preds)) {
     const picks = rec?.picks || {};
-    let points = 0;
+    let pts = 0;
 
     for (const [fid, pick] of Object.entries(picks)) {
-      const r = resMap[String(fid)];
-      if (!r) continue; // no result yet
-      const exactPick = String(pick).match(/^(\d+)\s*-\s*(\d+)$/);
-      if (exactPick) {
-        // exact score pick e.g. "2-1"
-        const hp = Number(exactPick[1]);
-        const ap = Number(exactPick[2]);
+      const r = results[String(fid)];
+      if (!r) continue;
+      const exact = String(pick).match(/^(\d+)\s*-\s*(\d+)$/);
+      if (exact) {
+        const hp = Number(exact[1]), ap = Number(exact[2]);
         if (hp === r.homeGoals && ap === r.awayGoals) {
-          points += 5;
-        } else {
-          const pickRes = resultFromGoals(hp, ap);
-          const realRes = resultFromGoals(r.homeGoals, r.awayGoals);
-          if (pickRes === realRes) points += 2;
+          pts += 5;
+        } else if (resultFromGoals(hp, ap) === resultFromGoals(r.homeGoals, r.awayGoals)) {
+          pts += 2;
         }
-      } else {
-        // result only pick: H/D/A
-        const pickRes = resultFromPick(pick);
-        if (!pickRes) continue;
-        const realRes = resultFromGoals(r.homeGoals, r.awayGoals);
-        if (pickRes === realRes) points += 2;
+      } else if (resultFromPick(pick) === resultFromGoals(r.homeGoals, r.awayGoals)) {
+        pts += 2;
       }
     }
-
-    weekly[pid] = points;
+    weekly[pid] = pts;
   }
 
-  // load/update season totals
-  const totals = loadJson(totalsJsonPath, {}); // { player_id: { name, total, weeks: {1: pts, 2: pts, ...} } }
+  // update season totals
+  const totals = readJson(totalsJson, {});
   for (const pl of players) {
     const id = String(pl.id);
     if (!totals[id]) totals[id] = { name: pl.name || `Player ${id}`, total: 0, weeks: {} };
-    const wPts = weekly[id] || 0;
-    totals[id].weeks[week] = wPts;
-    // re-calc total to keep it honest
+    totals[id].weeks[week] = weekly[id] || 0;
     totals[id].total = Object.values(totals[id].weeks).reduce((a,b)=>a+(b||0), 0);
   }
-  saveJson(totalsJsonPath, totals);
+  writeJson(totalsJson, totals);
 
-  // write CSV (player_id,name,total,W1,W2,... up to current week seen)
-  const allWeeks = new Set();
-  Object.values(totals).forEach(t => Object.keys(t.weeks).forEach(w => allWeeks.add(Number(w))));
-  const sortedWeeks = Array.from(allWeeks).sort((a,b)=>a-b);
+  // write CSV leaderboard
+  const weekSet = new Set();
+  Object.values(totals).forEach(t => Object.keys(t.weeks).forEach(w => weekSet.add(Number(w))));
+  const cols = Array.from(weekSet).sort((a,b)=>a-b);
   const rows = Object.entries(totals).map(([pid, t]) => {
-    const row = { player_id: pid, name: t.name, total: t.total };
-    sortedWeeks.forEach(w => row[`W${w}`] = t.weeks[w] ?? 0);
-    return row;
+    const r = { player_id: pid, name: t.name, total: t.total };
+    cols.forEach(w => r[`W${w}`] = t.weeks[w] ?? 0);
+    return r;
   });
-  fs.mkdirSync(path.dirname(totalsCsvPath), { recursive: true });
-  fs.writeFileSync(totalsCsvPath, toCSV(rows), 'utf8');
+  fs.mkdirSync(path.dirname(totalsCsv), { recursive: true });
+  fs.writeFileSync(totalsCsv, toCSV(rows), 'utf8');
 
   return res.json({
     ok: true,
     week,
     weekly_points: weekly,
     leaderboard: rows.sort((a,b)=>b.total - a.total),
-    csv: path.relative(process.cwd(), totalsCsvPath)
+    csv: path.relative(process.cwd(), totalsCsv),
   });
 });
 
-// ---------- 4) Quick preview ----------
-//
-// GET /api/admin/preview?week=1  -> { fixtures, results, predictions }
+// ---------- 4) Preview ----------
+// GET /api/admin/preview?week=1
 router.get('/preview', (req, res) => {
   const week = Number(req.query.week);
   if (!week) return res.status(400).json({ ok:false, error:'week required' });
-
-  const fixtures = loadJson(fixturesPath(week), []);
-  const results  = loadJson(resultsPath(week), {});
-  const preds    = loadJson(predictionsPath(week), {});
+  const fixtures = readJson(fixturesPath(week), []);
+  const results  = readJson(resultsPath(week), {});
+  const preds    = readJson(predsPath(week), {});
   res.json({ ok:true, week, fixtures, results, predictions: preds });
 });
 

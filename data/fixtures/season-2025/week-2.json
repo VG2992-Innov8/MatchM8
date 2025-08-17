@@ -1,0 +1,14 @@
+[
+  {
+    "id": "1",
+    "home": "Arsenal",
+    "away": "Leeds",
+    "kickoff_iso": "2025-08-17T02:43:47.160Z"
+  },
+  {
+    "id": "2",
+    "home": "Spurs",
+    "away": "Brentford",
+    "kickoff_iso": "2025-08-17T03:43:47.160Z"
+  }
+]
