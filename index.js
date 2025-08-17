@@ -8,7 +8,6 @@ const cookieParser = require('cookie-parser');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const adminRouter = require('./routes/admin');
 
 // ---- Global middleware
 app.use(cors());
@@ -27,11 +26,7 @@ app.use((req, res, next) => {
 
 // ---- Static
 app.use(express.static(path.join(__dirname, 'public')));
-// Static UI (summary page)
 app.use('/ui', express.static(path.join(__dirname, 'ui')));
-
-app.use('/api/admin', adminRouter);
-console.log('[BOOT] admin routes mounted at /api/admin');
 
 // ---- Reminder job (optional)
 try {
@@ -92,6 +87,11 @@ const auth = safeRequire('./routes/auth.js', './routes/auth');
 if (auth.ok) {
   mount('./routes/auth.js', '/api/auth', auth.mod);
   mount('./routes/auth.js', '/auth', auth.mod);
+}
+
+const admin = safeRequire('./routes/admin.js', './routes/admin');
+if (admin.ok) {
+  mount('./routes/admin.js', '/api/admin', admin.mod);
 }
 
 // ---------- Health + route list

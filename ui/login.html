@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>MatchM8 — Login</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, Segoe UI, Roboto, Arial; margin: 24px; }
+    .card { max-width: 420px; border:1px solid #ddd; border-radius:12px; padding:16px; }
+    input { width:100%; padding:10px; margin:8px 0; border:1px solid #ccc; border-radius:8px; }
+    button { padding:10px 14px; border:1px solid #ccc; border-radius:10px; background:#fafafa; cursor:pointer; }
+    .muted { color:#666; font-size:13px; }
+  </style>
+</head>
+<body>
+  <h1>Login</h1>
+  <div class="card">
+    <label>Player (id, name or email)</label>
+    <input id="login" placeholder="e.g. 1 or vince@example.com" />
+    <label>PIN</label>
+    <input id="pin" type="password" placeholder="e.g. 1111" />
+    <button id="go">Sign in</button>
+    <p id="msg" class="muted"></p>
+  </div>
+
+  <script>
+    const msg = document.getElementById('msg');
+    document.getElementById('go').addEventListener('click', async () => {
+      msg.textContent = 'Signing in…';
+      const r = await fetch('/api/auth/login', {
+        method:'POST', headers:{'content-type':'application/json'},
+        body: JSON.stringify({ login: login.value.trim(), pin: pin.value.trim() })
+      });
+      const j = await r.json().catch(()=>({}));
+      if (!r.ok || !j.ok) { msg.textContent = `Error: ${j.error || 'login failed'}`; return; }
+      location.href = '/ui/summary.html?week=1';
+    });
+  </script>
+</body>
+</html>

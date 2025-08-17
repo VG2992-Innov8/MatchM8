@@ -128,4 +128,58 @@ router.post("/pin/verify", express.json(), (req, res) => {
 // Admin: ping
 router.get("/admin/ping", requireAdmin, (_req, res) => res.json({ ok: true, admin: true }));
 
+// ---- Cookie login for player UI ----
+// POST /api/auth/login  { login: "1|name|email", pin: "1111" }
+// Sets cookie: mm8_pid = <player.id> (preferred) or name (fallback)
+router.post('/login', express.json(), (req, res) => {
+  const { login, pin } = req.body || {};
+  if (!login || !pin) return res.status(400).json({ ok:false, error: 'login and pin required' });
+
+  const db = loadPlayers();
+  const list = db.players || [];
+
+  // allow id, email, or name
+  const byId    = list.find(p => String(p.id) === String(login));
+  const byEmail = list.find(p => String(p.email || '').trim().toLowerCase() === String(login).trim().toLowerCase());
+  const byName  = findPlayerByName(list, login);
+  const me = byId || byEmail || byName;
+
+  // use name for lock tracking if we have it, otherwise the raw login
+  const lockKey = me?.name || login;
+  const remain = checkLocked(lockKey);
+  if (remain > 0) return res.status(423).json({ ok:false, error:'Locked. Try later.', ms_remaining: remain });
+
+  if (!me || String(me.pin || '') !== String(pin)) {
+    const state = recordFail(lockKey);
+    if (state.locked_until) {
+      return res.status(423).json({ ok:false, error:'Locked due to repeated failures.', ms_remaining: LOCK_MS });
+    }
+    return res.status(401).json({ ok:false, error:'Invalid credentials', attempts_left: Math.max(0, (MAX_ATTEMPTS - state.count)) });
+  }
+
+  resetAttempts(lockKey);
+
+  // prefer numeric/string id; fallback to name if no id present
+  const cookieVal = me.id != null ? String(me.id) : String(me.name);
+  res.cookie('mm8_pid', cookieVal, { httpOnly: true, sameSite: 'lax', maxAge: 90*24*60*60*1000, path: '/' });
+  res.json({ ok:true, player: { id: me.id ?? null, name: me.name, email: me.email ?? null } });
+});
+
+// GET /api/auth/me -> who am I?
+router.get('/me', (req, res) => {
+  const pid = req.cookies?.mm8_pid;
+  if (!pid) return res.json({ ok:true, player: null });
+  const db = loadPlayers(); const list = db.players || [];
+  const byId = list.find(p => String(p.id) === String(pid));
+  const byName = findPlayerByName(list, pid);
+  const me = byId || byName || null;
+  res.json({ ok:true, player: me ? { id: me.id ?? null, name: me.name, email: me.email ?? null } : null });
+});
+
+// POST /api/auth/logout
+router.post('/logout', (_req, res) => {
+  res.clearCookie('mm8_pid', { path: '/' });
+  res.json({ ok:true });
+});
+
 module.exports = router;
