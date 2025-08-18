@@ -1,14 +1,18 @@
 {
   "1": {
-    "picks": {
-      "1": "D",
-      "2": "H",
-      "W1-M6": "A",
-      "W1-M7": "D",
-      "W1-M8": "H",
-      "W1-M9": "H"
-    },
-    "submitted_at": "2025-08-17T13:18:23.854Z",
+    "predictions": [
+      {
+        "fixture_id": "fixture_chelsea_liverpool",
+        "home_goals": 1,
+        "away_goals": 2
+      },
+      {
+        "fixture_id": "fixture_arsenal_spurs",
+        "home_goals": 2,
+        "away_goals": 1
+      }
+    ],
+    "submitted_at": "2025-08-18T02:57:51.415Z",
     "email_sent_at": "2025-08-17T01:56:03.142Z"
   }
 }

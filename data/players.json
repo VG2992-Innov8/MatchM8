@@ -1,5 +1,26 @@
 [
-  { "id": 1, "name": "Vince", "pin": "1111", "email": "vince@example.com" },
-  { "id": 2, "name": "Toby",  "pin": "1111", "email": "toby@example.com"  },
-  { "id": 3, "name": "Bob",   "pin": "1111", "email": "bob@example.com"   }
+  {
+    "id": 1,
+    "name": "Vince",
+    "pin": "1111",
+    "email": "vince@example.com"
+  },
+  {
+    "id": 2,
+    "name": "Toby",
+    "pin": "1111",
+    "email": "toby@example.com"
+  },
+  {
+    "id": 3,
+    "name": "Bob",
+    "pin": "1111",
+    "email": "bob@example.com"
+  },
+  {
+    "id": 4,
+    "name": "Lee",
+    "email": "Lee@example.com",
+    "pin": "1111"
+  }
 ]

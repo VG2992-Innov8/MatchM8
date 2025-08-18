@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8">
   <title>Login</title>
   <style>
     label, input {
@@ -13,9 +13,9 @@
 <body>
   <h2>Login</h2>
   <label>Username or Email:</label>
-  <input type="text" id="nameOrEmail" />
+  <input type="text" id="nameOrEmail">
   <label>PIN:</label>
-  <input type="password" id="pin" />
+  <input type="password" id="pin">
   <button onclick="submitLogin()">Login</button>
 
   <script>
@@ -26,16 +26,17 @@
       const res = await fetch('/auth/pin/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: nameOrEmail, email: nameOrEmail, pin })
+        body: JSON.stringify({ name: nameOrEmail, pin })
       });
 
       const data = await res.json();
+
       if (res.ok && data.player_id) {
         localStorage.setItem('player_id', data.player_id);
         localStorage.setItem('player_name', nameOrEmail);
         window.location.href = '/ui/summary.html?week=1';
       } else {
-        alert('Login failed. Check your name or email and PIN.');
+        alert(data.error || 'Login failed. Check your name/email and PIN.');
       }
     }
   </script>

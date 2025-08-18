@@ -1,0 +1,26 @@
+// Add this route in routes/auth.js
+
+router.post('/register', (req, res) => {
+  const { name, email, pin } = req.body;
+  const playersPath = path.join(__dirname, '../data/players.json');
+  const players = require(playersPath);
+
+  // Check for existing name
+  let existing = players.find(p => p.name.toLowerCase() === name.toLowerCase());
+  if (existing) {
+    // Try to suggest an alternative
+    const initial = name.charAt(0).toUpperCase();
+    const fallback = name + initial;
+    if (players.find(p => p.name.toLowerCase() === fallback.toLowerCase())) {
+      return res.status(409).json({ error: "Name already taken. Try another." });
+    }
+    return res.status(409).json({ error: "Name already taken. Try '" + fallback + "'." });
+  }
+
+  const id = players.length ? Math.max(...players.map(p => p.id)) + 1 : 1;
+  const newPlayer = { id, name, email, pin };
+  players.push(newPlayer);
+  fs.writeFileSync(playersPath, JSON.stringify(players, null, 2));
+
+  res.json({ player_id: id, name });
+});

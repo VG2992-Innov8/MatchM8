@@ -1,185 +1,86 @@
-// routes/auth.js
-const express = require("express");
-const fs = require("fs");
-const path = require("path");
-
+const express = require('express');
+const fs = require('fs');
+const path = require('path');
 const router = express.Router();
 
-const DATA_DIR     = path.join(__dirname, "..", "data");
-const PLAYERS_PATH = path.join(DATA_DIR, "players.json");
+// --- Helpers ---
+const playersPath = path.join(__dirname, '../data/players.json');
 
-// ---- Config (env)
-const MAX_ATTEMPTS = Number(process.env.PIN_MAX_ATTEMPTS || 5);
-const LOCK_MS      = Number(process.env.PIN_LOCK_MS || 15 * 60 * 1000); // 15 minutes
+const loadPlayers = () => {
+  return JSON.parse(fs.readFileSync(playersPath));
+};
 
-// ---- Helpers: IO
-function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-function readJSON(abs, fallback) {
-  try { return JSON.parse(fs.readFileSync(abs, "utf8")); } catch { return fallback; }
-}
-function writeJSON(abs, obj) {
-  ensureDataDir();
-  const tmp = abs + ".tmp";
-  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2));
-  fs.renameSync(tmp, abs);
-}
+const savePlayers = (players) => {
+  fs.writeFileSync(playersPath, JSON.stringify(players, null, 2));
+};
 
-// ---- Players store shape
-// Accept either { "players": [ ... ] } or bare [ ... ]
-function loadPlayers() {
-  const raw = readJSON(PLAYERS_PATH, { players: [] });
-  if (Array.isArray(raw)) return { players: raw };
-  if (!Array.isArray(raw.players)) raw.players = [];
-  return raw;
-}
-function savePlayers(obj) { writeJSON(PLAYERS_PATH, obj); }
-function findPlayerByName(list, name) {
-  const n = String(name || "").trim().toLowerCase();
-  return list.find(p => String(p.name || "").trim().toLowerCase() === n) || null;
-}
-
-// ---- In-memory PIN attempts / lockouts
-const attempts = new Map(); // { key: { count, locked_until } }
-function keyFor(name) { return String(name || "").trim().toLowerCase(); }
-function resetAttempts(name) { attempts.delete(keyFor(name)); }
-function recordFail(name) {
-  const k = keyFor(name);
-  const cur = attempts.get(k) || { count: 0, locked_until: 0 };
-  const next = { ...cur, count: cur.count + 1 };
-  if (next.count >= MAX_ATTEMPTS) {
-    next.locked_until = Date.now() + LOCK_MS;
-    next.count = 0;
-  }
-  attempts.set(k, next);
-  return next;
-}
-function checkLocked(name) {
-  const cur = attempts.get(keyFor(name));
-  if (!cur) return 0;
-  const now = Date.now();
-  if (cur.locked_until && cur.locked_until > now) return cur.locked_until - now;
-  return 0;
-}
-
-// ---- Admin guard middleware (reads env per request)
-function requireAdmin(req, res, next) {
-  const ADMIN_KEY = process.env.ADMIN_KEY || "";
-  const hdr = req.headers["x-admin-key"] || "";
-  const auth = req.headers["authorization"] || "";
-  const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  const provided = String(hdr || bearer || "").trim();
-  if (!ADMIN_KEY || provided !== ADMIN_KEY) {
-    return res.status(401).json({ error: "Admin auth required" });
-  }
-  next();
-}
-
-// ---------- Routes
-
-// Admin: list players (names only)
-router.get("/players", requireAdmin, (_req, res) => {
-  const db = loadPlayers();
-  res.json({ players: db.players.map(p => ({ name: p.name })) });
+// --- Set PIN manually ---
+router.post('/pin/set', (req, res) => {
+  const { name, pin } = req.body;
+  const players = loadPlayers();
+  const player = players.find(p => p.name === name);
+  if (!player) return res.status(404).json({ error: 'Player not found' });
+  player.pin = pin;
+  savePlayers(players);
+  res.json({ ok: true });
 });
 
-// Admin: set or update a player's PIN
-// Body: { "name":"Vince", "pin":"1111" }
-router.post("/pin/set", requireAdmin, express.json(), (req, res) => {
-  const { name, pin } = req.body || {};
-  if (!name || !pin) return res.status(400).json({ error: "name and pin required" });
+// --- Verify PIN login (name or email) ---
+// Verify PIN login
+router.post('/pin/verify', (req, res) => {
+  const { name, email, pin } = req.body;
+  const players = readJSON('data/players.json');
 
-  const db = loadPlayers();
-  const existing = findPlayerByName(db.players, name);
-  if (existing) existing.pin = String(pin);
-  else db.players.push({ name: String(name), pin: String(pin) });
+  const player = players.find(p =>
+    (p.name?.toLowerCase() === name?.toLowerCase() || 
+     p.email?.toLowerCase() === email?.toLowerCase()) &&
+    p.pin === pin
+  );
 
-  savePlayers(db);
-  resetAttempts(name); // clear lockout
-  res.json({ ok: true, name: String(name) });
+  if (player) {
+    res.json({ player_id: player.id });
+  } else {
+    res.status(401).json({ error: 'Invalid login' });
+  }
 });
 
-// Player: verify PIN (with lockout)
-// Body: { "name":"Vince", "pin":"1111" }
-router.post("/pin/verify", express.json(), (req, res) => {
-  const { name, pin } = req.body || {};
-  if (!name || !pin) return res.status(400).json({ error: "name and pin required" });
 
-  const remain = checkLocked(name);
-  if (remain > 0) {
-    return res.status(423).json({ error: "Locked. Try later.", ms_remaining: remain });
-  }
-
-  const db = loadPlayers();
-  const player = findPlayerByName(db.players, name);
-  if (!player || String(player.pin) !== String(pin)) {
-    const state = recordFail(name);
-    if (state.locked_until) {
-      return res.status(423).json({ error: "Locked due to repeated failures.", ms_remaining: LOCK_MS });
-    }
-    return res.status(401).json({ error: "Invalid name or PIN", attempts_left: Math.max(0, (MAX_ATTEMPTS - state.count)) });
-  }
-
-  resetAttempts(name);
-  res.json({ ok: true, name: String(player.name) });
-});
-
-// Admin: ping
-router.get("/admin/ping", requireAdmin, (_req, res) => res.json({ ok: true, admin: true }));
-
-// ---- Cookie login for player UI ----
-// POST /api/auth/login  { login: "1|name|email", pin: "1111" }
-// Sets cookie: mm8_pid = <player.id> (preferred) or name (fallback)
-router.post('/login', express.json(), (req, res) => {
-  const { login, pin } = req.body || {};
-  if (!login || !pin) return res.status(400).json({ ok:false, error: 'login and pin required' });
-
-  const db = loadPlayers();
-  const list = db.players || [];
-
-  // allow id, email, or name
-  const byId    = list.find(p => String(p.id) === String(login));
-  const byEmail = list.find(p => String(p.email || '').trim().toLowerCase() === String(login).trim().toLowerCase());
-  const byName  = findPlayerByName(list, login);
-  const me = byId || byEmail || byName;
-
-  // use name for lock tracking if we have it, otherwise the raw login
-  const lockKey = me?.name || login;
-  const remain = checkLocked(lockKey);
-  if (remain > 0) return res.status(423).json({ ok:false, error:'Locked. Try later.', ms_remaining: remain });
-
-  if (!me || String(me.pin || '') !== String(pin)) {
-    const state = recordFail(lockKey);
-    if (state.locked_until) {
-      return res.status(423).json({ ok:false, error:'Locked due to repeated failures.', ms_remaining: LOCK_MS });
-    }
-    return res.status(401).json({ ok:false, error:'Invalid credentials', attempts_left: Math.max(0, (MAX_ATTEMPTS - state.count)) });
-  }
-
-  resetAttempts(lockKey);
-
-  // prefer numeric/string id; fallback to name if no id present
-  const cookieVal = me.id != null ? String(me.id) : String(me.name);
-  res.cookie('mm8_pid', cookieVal, { httpOnly: true, sameSite: 'lax', maxAge: 90*24*60*60*1000, path: '/' });
-  res.json({ ok:true, player: { id: me.id ?? null, name: me.name, email: me.email ?? null } });
-});
-
-// GET /api/auth/me -> who am I?
+// --- Get current session info ---
 router.get('/me', (req, res) => {
-  const pid = req.cookies?.mm8_pid;
-  if (!pid) return res.json({ ok:true, player: null });
-  const db = loadPlayers(); const list = db.players || [];
-  const byId = list.find(p => String(p.id) === String(pid));
-  const byName = findPlayerByName(list, pid);
-  const me = byId || byName || null;
-  res.json({ ok:true, player: me ? { id: me.id ?? null, name: me.name, email: me.email ?? null } : null });
+  const id = req.cookies?.player_id;
+  const players = loadPlayers();
+  const player = players.find(p => p.id === Number(id));
+  if (!player) return res.status(401).json({ error: 'Not logged in' });
+  res.json(player);
 });
 
-// POST /api/auth/logout
-router.post('/logout', (_req, res) => {
-  res.clearCookie('mm8_pid', { path: '/' });
-  res.json({ ok:true });
+// --- Log out ---
+router.post('/logout', (req, res) => {
+  res.clearCookie('player_id');
+  res.sendStatus(200);
+});
+
+// --- Register new player ---
+router.post('/register', (req, res) => {
+  const { name, email, pin } = req.body;
+  const players = loadPlayers();
+
+  let existing = players.find(p => p.name.toLowerCase() === name.toLowerCase());
+  if (existing) {
+    const initial = name.charAt(0).toUpperCase();
+    const fallback = name + initial;
+    if (players.find(p => p.name.toLowerCase() === fallback.toLowerCase())) {
+      return res.status(409).json({ error: "Name already taken. Try another." });
+    }
+    return res.status(409).json({ error: "Name already taken. Try '" + fallback + "'." });
+  }
+
+  const id = players.length ? Math.max(...players.map(p => p.id)) + 1 : 1;
+  const newPlayer = { id, name, email, pin };
+  players.push(newPlayer);
+  savePlayers(players);
+
+  res.json({ player_id: id, name });
 });
 
 module.exports = router;

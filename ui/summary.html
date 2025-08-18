@@ -60,14 +60,17 @@
       location.href = "login.html";
     }
 
+    let fixtureList = [];
+
     fetch(`/api/fixtures?week=${week}`)
       .then(res => res.json())
       .then(data => {
+        fixtureList = data.fixtures;
         const tbody = document.querySelector("tbody");
-        data.forEach(fixture => {
+        fixtureList.forEach(fixture => {
           const row = document.createElement("tr");
           row.innerHTML = `
-            <td>${fixture.home_team} vs ${fixture.away_team}</td>
+            <td>${fixture.home} vs ${fixture.away}</td>
             <td>
               <input type="number" min="0" max="20" id="home_${fixture.id}" placeholder="HG" />
               <span>–</span>
@@ -80,22 +83,20 @@
 
     function savePredictions() {
       const predictions = [];
-      document.querySelectorAll("tbody tr").forEach(row => {
-        const matchCell = row.children[0];
-        const fixtureText = matchCell.textContent.trim();
-        const [homeTeam, awayTeam] = fixtureText.split(" vs ");
-        const fixtureId = `fixture_${homeTeam.replace(/\s/g, '')}_${awayTeam.replace(/\s/g, '')}`.toLowerCase();
 
-        const hg = document.getElementById(`home_${fixtureId}`).value;
-        const ag = document.getElementById(`away_${fixtureId}`).value;
+      fixtureList.forEach(fixture => {
+        const homeInput = document.getElementById(`home_${fixture.id}`);
+        const awayInput = document.getElementById(`away_${fixture.id}`);
+        const hg = homeInput?.value;
+        const ag = awayInput?.value;
 
-        if (hg === "" || ag === "") return;
-
-        predictions.push({
-          fixture_id: fixtureId,
-          home_goals: parseInt(hg),
-          away_goals: parseInt(ag)
-        });
+        if (hg !== "" && ag !== "") {
+          predictions.push({
+            fixture_id: fixture.id,
+            home_goals: parseInt(hg),
+            away_goals: parseInt(ag)
+          });
+        }
       });
 
       fetch(`/api/predictions?week=${week}`, {
@@ -106,7 +107,7 @@
         if (res.ok) {
           document.getElementById("banner").style.display = "block";
         } else {
-          alert("Error saving predictions");
+          alert("Error saving predictions.");
         }
       });
     }

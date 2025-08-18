@@ -1,14 +1,14 @@
 [
   {
-    "id": "1",
-    "home": "Arsenal",
-    "away": "Leeds",
-    "kickoff_iso": "2025-08-18T02:41:06.302Z"
+    "id": "fixture_chelsea_liverpool",
+    "home_team": "Chelsea",
+    "away_team": "Liverpool",
+    "kickoff": "2025-08-20T18:00:00Z"
   },
   {
-    "id": "2",
-    "home": "Spurs",
-    "away": "Brentford",
-    "kickoff_iso": "2025-08-18T03:41:06.302Z"
+    "id": "fixture_arsenal_spurs",
+    "home_team": "Arsenal",
+    "away_team": "Spurs",
+    "kickoff": "2025-08-21T19:00:00Z"
   }
 ]
