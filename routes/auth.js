@@ -1,86 +1,130 @@
 const express = require('express');
-const fs = require('fs');
-const path = require('path');
 const router = express.Router();
+const fs = require('fs/promises');
+const path = require('path');
 
-// --- Helpers ---
-const playersPath = path.join(__dirname, '../data/players.json');
+const DATA_DIR = path.join(__dirname, '..', 'data');
+const PLAYERS_FILE = path.join(DATA_DIR, 'players.json');
 
-const loadPlayers = () => {
-  return JSON.parse(fs.readFileSync(playersPath));
-};
+// Helper: Load all players
+async function loadPlayers() {
+  try {
+    const data = await fs.readFile(PLAYERS_FILE, 'utf8');
+    return JSON.parse(data);
+  } catch (err) {
+    console.error('Failed to load players:', err);
+    return [];
+  }
+}
 
-const savePlayers = (players) => {
-  fs.writeFileSync(playersPath, JSON.stringify(players, null, 2));
-};
+// Helper: Save all players
+async function savePlayers(players) {
+  try {
+    await fs.writeFile(PLAYERS_FILE, JSON.stringify(players, null, 2), 'utf8');
+  } catch (err) {
+    console.error('Failed to save players:', err);
+  }
+}
 
-// --- Set PIN manually ---
-router.post('/pin/set', (req, res) => {
+// --- Register new player ---
+router.post('/player/register', async (req, res) => {
+  const { name, email } = req.body;
+  if (!name || !email) {
+    return res.status(400).json({ error: 'Missing name or email' });
+  }
+
+  const players = await loadPlayers();
+  const exists = players.find(p => p.name === name || p.email === email);
+  if (exists) {
+    return res.status(409).json({ error: 'Player already exists' });
+  }
+
+  const newPlayer = {
+    id: Date.now().toString(),
+    name,
+    email,
+    pin: null
+  };
+
+  players.push(newPlayer);
+  await savePlayers(players);
+  res.json({ ok: true, player: newPlayer });
+});
+
+// --- Update player info ---
+router.post('/player/update', async (req, res) => {
+  const { id, name, email } = req.body;
+  const players = await loadPlayers();
+  const player = players.find(p => p.id === id);
+
+  if (!player) {
+    return res.status(404).json({ error: 'Player not found' });
+  }
+
+  player.name = name ?? player.name;
+  player.email = email ?? player.email;
+
+  await savePlayers(players);
+  res.json({ ok: true, player });
+});
+
+// --- Delete player ---
+router.post('/player/delete', async (req, res) => {
+  const { id } = req.body;
+  let players = await loadPlayers();
+  const initialLength = players.length;
+  players = players.filter(p => p.id !== id);
+
+  if (players.length === initialLength) {
+    return res.status(404).json({ error: 'Player not found' });
+  }
+
+  await savePlayers(players);
+  res.json({ ok: true });
+});
+
+// --- Set PIN for player ---
+router.post('/pin/set', async (req, res) => {
   const { name, pin } = req.body;
-  const players = loadPlayers();
+  const players = await loadPlayers();
   const player = players.find(p => p.name === name);
-  if (!player) return res.status(404).json({ error: 'Player not found' });
+
+  if (!player) {
+    return res.status(404).json({ error: 'Player not found' });
+  }
+
   player.pin = pin;
-  savePlayers(players);
+  await savePlayers(players);
   res.json({ ok: true });
 });
 
 // --- Verify PIN login (name or email) ---
-// Verify PIN login
-router.post('/pin/verify', (req, res) => {
-  const { name, email, pin } = req.body;
-  const players = readJSON('data/players.json');
+router.post('/pin/verify', async (req, res) => {
+  const { nameOrEmail, pin } = req.body;
 
-  const player = players.find(p =>
-    (p.name?.toLowerCase() === name?.toLowerCase() || 
-     p.email?.toLowerCase() === email?.toLowerCase()) &&
-    p.pin === pin
-  );
-
-  if (player) {
-    res.json({ player_id: player.id });
-  } else {
-    res.status(401).json({ error: 'Invalid login' });
+  if (!nameOrEmail || !pin) {
+    return res.status(400).json({ error: 'Missing nameOrEmail or pin' });
   }
-});
 
+  try {
+    const players = await loadPlayers();
+    const input = nameOrEmail.toLowerCase();
 
-// --- Get current session info ---
-router.get('/me', (req, res) => {
-  const id = req.cookies?.player_id;
-  const players = loadPlayers();
-  const player = players.find(p => p.id === Number(id));
-  if (!player) return res.status(401).json({ error: 'Not logged in' });
-  res.json(player);
-});
+    const matchedPlayer = players.find(p => {
+      const nameMatch = p.name?.toLowerCase() === input;
+      const emailMatch = p.email?.toLowerCase() === input;
+      return (nameMatch || emailMatch) && p.pin === pin;
+    });
 
-// --- Log out ---
-router.post('/logout', (req, res) => {
-  res.clearCookie('player_id');
-  res.sendStatus(200);
-});
-
-// --- Register new player ---
-router.post('/register', (req, res) => {
-  const { name, email, pin } = req.body;
-  const players = loadPlayers();
-
-  let existing = players.find(p => p.name.toLowerCase() === name.toLowerCase());
-  if (existing) {
-    const initial = name.charAt(0).toUpperCase();
-    const fallback = name + initial;
-    if (players.find(p => p.name.toLowerCase() === fallback.toLowerCase())) {
-      return res.status(409).json({ error: "Name already taken. Try another." });
+    if (matchedPlayer) {
+      res.json({ ok: true, player_id: matchedPlayer.id, name: matchedPlayer.name });
+    } else {
+      res.status(401).json({ error: 'Invalid credentials' });
     }
-    return res.status(409).json({ error: "Name already taken. Try '" + fallback + "'." });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to verify PIN' });
   }
-
-  const id = players.length ? Math.max(...players.map(p => p.id)) + 1 : 1;
-  const newPlayer = { id, name, email, pin };
-  players.push(newPlayer);
-  savePlayers(players);
-
-  res.json({ player_id: id, name });
 });
 
 module.exports = router;

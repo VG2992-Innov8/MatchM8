@@ -65,49 +65,49 @@
   </div>
 
   <script>
-    // Login handler
-    document.getElementById("loginForm").addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const nameOrEmail = document.getElementById("loginName").value.trim();
-      const pin = document.getElementById("loginPin").value.trim();
+  // Login handler
+  document.getElementById("loginForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const nameOrEmail = document.getElementById("loginName").value.trim();
+    const pin = document.getElementById("loginPin").value.trim();
 
-      const res = await fetch("/auth/pin/verify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, pin }),
-      });
-
-      const data = await res.json();
-      if (res.ok && data.player_id) {
-        localStorage.setItem("player_id", data.player_id);
-        window.location.href = "/ui/summary.html?week=1";
-      } else {
-        alert("Login failed. Check your name and PIN.");
-      }
+    const res = await fetch("/auth/pin/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nameOrEmail, pin }),
     });
 
-    // Register handler
-    document.getElementById("registerForm").addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const name = document.getElementById("regName").value.trim();
-      const email = document.getElementById("regEmail").value.trim();
-      const pin = document.getElementById("regPin").value.trim();
+    const data = await res.json();
+    if (res.ok && data.player_id) {
+      localStorage.setItem("player_id", data.player_id);
+      window.location.href = "/ui/summary.html?week=1";
+    } else {
+      alert("Login failed. Check your name/email and PIN.");
+    }
+  });
 
-      const res = await fetch("/auth/register", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nameOrEmail, pin }),
-      });
+  // Register handler
+  document.getElementById("registerForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = document.getElementById("regName").value.trim();
+    const email = document.getElementById("regEmail").value.trim();
+    const pin = document.getElementById("regPin").value.trim();
 
-      const data = await res.json();
-      if (res.ok && data.player_id) {
-        alert("Registered successfully as " + data.name);
-        localStorage.setItem("player_id", data.player_id);
-        window.location.href = "/ui/summary.html?week=1";
-      } else {
-        alert(data.error || "Registration failed.");
-      }
+    const res = await fetch("/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, email, pin }),
     });
-  </script>
+
+    const data = await res.json();
+    if (res.ok && data.player_id) {
+      alert("Registered successfully as " + data.name);
+      localStorage.setItem("player_id", data.player_id);
+      window.location.href = "/ui/summary.html?week=1";
+    } else {
+      alert(data.error || "Registration failed.");
+    }
+  });
+</script>
 </body>
 </html>

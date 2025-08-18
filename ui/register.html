@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Register</title>
+  <style>
+    label, input {
+      display: block;
+      margin-bottom: 1rem;
+      width: 100%;
+    }
+  </style>
+</head>
+<body>
+  <h2>Register New Player</h2>
+  <label>Name:</label>
+  <input type="text" id="name" />
+
+  <label>Email:</label>
+  <input type="email" id="email" />
+
+  <label>PIN:</label>
+  <input type="password" id="pin" />
+
+  <button onclick="submitRegistration()">Register</button>
+
+  <script>
+    async function submitRegistration() {
+      const name = document.getElementById('name').value.trim();
+      const email = document.getElementById('email').value.trim();
+      const pin = document.getElementById('pin').value.trim();
+
+      const res = await fetch('/auth/pin/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, email, pin })
+      });
+
+      const data = await res.json();
+
+      if (res.ok && data.player_id) {
+        localStorage.setItem('player_id', data.player_id);
+        localStorage.setItem('player_name', name);
+        window.location.href = '/ui/summary.html?week=1';
+      } else {
+        alert('Registration failed: ' + (data.error || 'Unknown error'));
+      }
+    }
+  </script>
+</body>
+</html>
