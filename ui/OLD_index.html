@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>MatchM8 – Welcome</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      max-width: 600px;
+      margin: 50px auto;
+    }
+    h1 {
+      text-align: center;
+    }
+    .form-box {
+      border: 1px solid #ccc;
+      padding: 20px;
+      margin-bottom: 30px;
+    }
+    input {
+      width: 100%;
+      padding: 8px;
+      margin-top: 5px;
+      margin-bottom: 15px;
+      font-size: 1rem;
+    }
+    button {
+      padding: 10px 15px;
+      font-size: 1rem;
+    }
+    label {
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <h1>Welcome to MatchM8</h1>
+
+  <div class="form-box">
+    <h2>Login</h2>
+    <form id="loginForm">
+      <label>Username:
+        <input type="text" id="loginName" required />
+      </label>
+      <label>PIN:
+        <input type="password" id="loginPin" required />
+      </label>
+      <button type="submit">Login</button>
+    </form>
+  </div>
+
+  <div class="form-box">
+    <h2>New Player Registration</h2>
+    <form id="registerForm">
+      <label>Full Name:
+        <input type="text" id="regName" required />
+      </label>
+      <label>Email:
+        <input type="email" id="regEmail" required />
+      </label>
+      <label>PIN:
+        <input type="password" id="regPin" required />
+      </label>
+      <button type="submit">Register</button>
+    </form>
+  </div>
+
+  <script>
+  // Login handler
+  document.getElementById("loginForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const nameOrEmail = document.getElementById("loginName").value.trim();
+    const pin = document.getElementById("loginPin").value.trim();
+
+    const res = await fetch("/auth/pin/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nameOrEmail, pin }),
+    });
+
+    const data = await res.json();
+    if (res.ok && data.player_id) {
+      localStorage.setItem("player_id", data.player_id);
+      window.location.href = "/ui/summary.html?week=1";
+    } else {
+      alert("Login failed. Check your name/email and PIN.");
+    }
+  });
+
+  // Register handler
+  document.getElementById("registerForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = document.getElementById("regName").value.trim();
+    const email = document.getElementById("regEmail").value.trim();
+    const pin = document.getElementById("regPin").value.trim();
+
+    const res = await fetch("/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, email, pin }),
+    });
+
+    const data = await res.json();
+    if (res.ok && data.player_id) {
+      alert("Registered successfully as " + data.name);
+      localStorage.setItem("player_id", data.player_id);
+      window.location.href = "/ui/summary.html?week=1";
+    } else {
+      alert(data.error || "Registration failed.");
+    }
+  });
+</script>
+</body>
+</html>

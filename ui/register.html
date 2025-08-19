@@ -1,50 +1,116 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>Register</title>
-  <style>
-    label, input {
-      display: block;
-      margin-bottom: 1rem;
-      width: 100%;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <title>Register Player</title>
+    <style>
+        body {
+            background-color: #94DCF8;
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            text-align: center;
+        }
+
+        .header, .subheader, .navbar {
+            background-color: #44B3E1;
+            color: black;
+            padding: 15px 0;
+            border: 1px solid black;
+        }
+
+        .header {
+            font-size: 36px;
+            font-weight: bold;
+        }
+
+        .subheader {
+            font-size: 24px;
+        }
+
+        .navbar {
+            font-size: 22px;
+            font-weight: bold;
+        }
+
+        .container {
+            margin-top: 50px;
+        }
+
+        .input-group {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+        }
+
+        input[type="text"], input[type="email"] {
+            font-size: 20px;
+            padding: 10px;
+            width: 250px;
+            border: 2px solid black;
+            text-align: center;
+        }
+
+        .register-btn {
+            background-color: #44B3E1;
+            border: 2px solid black;
+            padding: 15px 40px;
+            font-size: 22px;
+            font-weight: bold;
+            margin-top: 30px;
+            cursor: pointer;
+        }
+
+        .back-btn {
+            margin-top: 50px;
+            font-size: 16px;
+            color: black;
+            text-decoration: underline;
+            cursor: pointer;
+        }
+    </style>
 </head>
 <body>
-  <h2>Register New Player</h2>
-  <label>Name:</label>
-  <input type="text" id="name" />
+    <div class="header">MatchM8 Soccer Predictions</div>
+    <div class="subheader">English Premier League</div>
+    <div class="navbar">New Player Registration</div>
 
-  <label>Email:</label>
-  <input type="email" id="email" />
+    <div class="container">
+        <div class="input-group">
+            <input id="name" type="text" placeholder="Player Name">
+            <input id="email" type="email" placeholder="Email Address">
+        </div>
+        <button class="register-btn" onclick="handleRegister()">Register</button>
 
-  <label>PIN:</label>
-  <input type="password" id="pin" />
+        <div class="back-btn" onclick="window.location.href='/'">← Back to Login</div>
+    </div>
 
-  <button onclick="submitRegistration()">Register</button>
+    <script>
+        async function handleRegister() {
+            const name = document.getElementById('name').value.trim();
+            const email = document.getElementById('email').value.trim();
 
-  <script>
-    async function submitRegistration() {
-      const name = document.getElementById('name').value.trim();
-      const email = document.getElementById('email').value.trim();
-      const pin = document.getElementById('pin').value.trim();
+            if (!name || !email) {
+                alert("Please enter both name and email.");
+                return;
+            }
 
-      const res = await fetch('/auth/pin/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, pin })
-      });
+            const response = await fetch('/auth/player/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, email })
+            });
 
-      const data = await res.json();
+            const result = await response.json();
 
-      if (res.ok && data.player_id) {
-        localStorage.setItem('player_id', data.player_id);
-        localStorage.setItem('player_name', name);
-        window.location.href = '/ui/summary.html?week=1';
-      } else {
-        alert('Registration failed: ' + (data.error || 'Unknown error'));
-      }
-    }
-  </script>
+            if (response.ok) {
+                alert("Registered successfully! Now go set your PIN.");
+                window.location.href = '/Part_A_PIN.html';
+            } else {
+                alert(result.error || "Registration failed.");
+            }
+        }
+    </script>
 </body>
 </html>
