@@ -1,213 +1,122 @@
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>MatchM8 — Part B: Predictions</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MatchM8 – Predictions</title>
   <style>
-    :root { --gap: 12px; }
-    body{font-family:system-ui,Arial,sans-serif;margin:24px;max-width:1000px}
-    h1{margin-top:0}
-    .row{display:flex;gap:var(--gap);align-items:center;flex-wrap:wrap;margin-bottom:var(--gap)}
-    label{display:flex;gap:6px;align-items:center}
-    input[type="number"]{width:64px}
-    table{border-collapse:collapse;width:100%;margin-top:var(--gap)}
-    th,td{border:1px solid #ddd;padding:8px;text-align:left}
-    th{background:#f5f5f5}
-    .status{min-height:1.5em}
-    .ok{color:#0a7a0a}
-    .warn{color:#8a6d3b}
-    .err{color:#b00020}
-    .muted{opacity:0.7}
-    .badge{display:inline-block;padding:2px 6px;border-radius:6px;background:#eee;margin-left:6px;font-size:12px}
+    body {
+      background-color: #a9dcf5;
+      font-family: sans-serif;
+    }
+
+    .title-bar, .league-bar, .subtitle-bar {
+      width: 100%;
+      padding: 15px;
+      background-color: #42bff5;
+      border-bottom: 2px solid black;
+      text-align: center;
+      font-weight: bold;
+    }
+
+    .title-bar {
+      font-size: 24px;
+    }
+
+    .league-bar {
+      font-size: 20px;
+    }
+
+    .subtitle-bar {
+      font-size: 18px;
+    }
+
+    .prediction-section {
+      background: white;
+      border: 2px solid #222;
+      border-radius: 10px;
+      padding: 20px;
+      max-width: 500px;
+      margin: 30px auto;
+      text-align: center;
+    }
+
+    .fixture-row {
+      margin: 20px 0;
+      font-size: 18px;
+    }
+
+    .score-input {
+      width: 40px;
+      font-size: 18px;
+      text-align: center;
+      margin: 0 10px;
+    }
+
+    .matchm8-button {
+      display: block;
+      margin: 20px auto 0 auto;
+      padding: 12px 25px;
+      font-size: 16px;
+      background-color: #42bff5;
+      border: 2px solid black;
+      border-radius: 10px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+
+    .matchm8-button:hover {
+      background-color: #1ca1dc;
+    }
   </style>
 </head>
 <body>
-  <h1>Part B — Enter Your Predictions</h1>
-  <div class="row">
-    <div>
-      <strong>Player:</strong> <span id="playerName" class="badge">—</span>
-      <span id="pinStatus" class="badge muted">PIN ready</span>
+  <div class="title-bar">MatchM8 Soccer Predictions</div>
+  <div class="league-bar" id="league-name-bar">English Premier League</div>
+  <div class="subtitle-bar" id="user-name-heading">Enter Predictions Below</div>
+
+  <form id="predictions-form" class="prediction-section">
+    <!-- Example Fixture Rows -->
+    <div class="fixture-row">
+      Chelsea 
+      <input type="number" class="score-input" name="chelsea_liverpool_home" min="0" max="10" value="0" />
+      vs
+      <input type="number" class="score-input" name="chelsea_liverpool_away" min="0" max="10" value="0" />
+      Liverpool
     </div>
-  </div>
 
-  <div class="row">
-    <label>Week
-      <input id="week" type="number" min="1" step="1" value="1" />
-    </label>
-    <button id="load">Load Fixtures</button>
-    <button id="loadMine" disabled>Load My Saved</button>
-    <button id="save" disabled>Save Predictions</button>
-    <span id="status" class="status"></span>
-  </div>
+    <div class="fixture-row">
+      Arsenal 
+      <input type="number" class="score-input" name="arsenal_spurs_home" min="0" max="10" value="0" />
+      vs
+      <input type="number" class="score-input" name="arsenal_spurs_away" min="0" max="10" value="0" />
+      Spurs
+    </div>
 
-  <table id="tbl">
-    <thead>
-      <tr>
-        <th>ID</th>
-        <th>Home</th>
-        <th class="muted">Kickoff (local)</th>
-        <th>Pred Home</th>
-        <th>Pred Away</th>
-        <th>Away</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  </table>
+    <button type="submit" class="matchm8-button">Submit Predictions</button>
+    <button type="button" onclick="location.href='index.html'" class="matchm8-button">Home</button>
+  </form>
 
   <script>
-    const $ = s => document.querySelector(s);
-    const tbody = $("#tbl tbody");
-    const status = $("#status");
-    const saveBtn = $("#save");
-    const loadBtn = $("#load");
-    const loadMineBtn = $("#loadMine");
-    const playerNameEl = $("#playerName");
-    const pinStatusEl = $("#pinStatus");
-
-    // Get player + pin from Part A (stored in localStorage)
-    const player = (localStorage.getItem("mm_player") || "").trim();
-    const pin    = (localStorage.getItem("mm_pin") || "").trim();
-
-    // Soft guard: if missing, nudge back to Part A
-    if (!player || !pin) {
-      playerNameEl.textContent = "— (go to Part A)";
-      pinStatusEl.textContent = "PIN missing";
-      pinStatusEl.classList.remove("muted");
-      pinStatusEl.classList.add("err");
-    } else {
-      playerNameEl.textContent = player;
-      pinStatusEl.textContent = "PIN ready";
-      pinStatusEl.classList.add("muted");
+    // Get name from URL and update heading
+    const params = new URLSearchParams(window.location.search);
+    const name = params.get('nameOrEmail');
+    if (name) {
+      document.getElementById('user-name-heading').textContent = `${name}'s Predictions`;
     }
 
-    // Utilities
-    function setMsg(text, kind="ok"){ status.textContent = text; status.className = "status " + kind; }
-    function clearMsg(){ setMsg(""); }
-    function toLocal(dtISO){
-      if (!dtISO) return "";
-      const d = new Date(dtISO);
-      if (isNaN(d)) return "";
-      return d.toLocaleString();
-    }
-    function numOrEmpty(v){ return (v === null || v === undefined || Number.isNaN(v)) ? "" : v; }
+    // Temporary: log predictions to console
+    document.getElementById('predictions-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      const formData = new FormData(e.target);
+      const predictions = {};
+      formData.forEach((value, key) => {
+        predictions[key] = value;
+      });
 
-    async function fetchJSON(url){
-      const res = await fetch(url);
-      const data = await res.json().catch(()=> ({}));
-      if (!res.ok) throw new Error(data.error || "Request failed");
-      return data;
-    }
-
-    function renderFixtures(fixtures){
-      tbody.innerHTML = fixtures.map((f, i) => `
-        <tr data-id="${f.id}">
-          <td>${f.id}</td>
-          <td>${f.home}</td>
-          <td class="muted">${toLocal(f.kickoff)}</td>
-          <td><input type="number" class="pred_home" min="0" step="1" inputmode="numeric"></td>
-          <td><input type="number" class="pred_away" min="0" step="1" inputmode="numeric"></td>
-          <td>${f.away}</td>
-        </tr>
-      `).join("");
-      saveBtn.disabled = false;
-      loadMineBtn.disabled = false;
-    }
-
-    function collectPredictions(){
-      return Array.from(tbody.querySelectorAll("tr")).map(tr => {
-        const id = tr.dataset.id;
-        const ph = tr.querySelector(".pred_home").value;
-        const pa = tr.querySelector(".pred_away").value;
-        const toInt = v => v === "" ? null : parseInt(v, 10);
-        const home = toInt(ph);
-        const away = toInt(pa);
-        // Only include rows where at least one side is provided (avoid spamming nulls)
-        if (home === null && away === null) return null;
-        return { fixture_id: id, home: home ?? 0, away: away ?? 0 };
-      }).filter(Boolean);
-    }
-
-    function applySavedPredictions(saved){
-      // saved.predictions is an array of { fixture_id, home, away, ... }
-      const map = new Map((saved.predictions || []).map(p => [p.fixture_id, p]));
-      for (const tr of tbody.querySelectorAll("tr")) {
-        const id = tr.dataset.id;
-        const p = map.get(id);
-        if (!p) continue;
-        const ph = tr.querySelector(".pred_home");
-        const pa = tr.querySelector(".pred_away");
-        ph.value = numOrEmpty(p.home);
-        pa.value = numOrEmpty(p.away);
-      }
-    }
-
-    // Event: Load fixtures
-    loadBtn.addEventListener("click", async () => {
-      clearMsg();
-      const week = String($("#week").value || "").trim();
-      if (!week) return setMsg("Please enter a week number.", "warn");
-      try {
-        const data = await fetchJSON(`/api/fixtures?week=${encodeURIComponent(week)}`);
-        renderFixtures(data.fixtures);
-        setMsg(`Loaded fixtures for week ${week}.`, "ok");
-      } catch(e) {
-        setMsg(e.message, "err");
-      }
+      console.log("Predictions submitted:", predictions);
+      alert("Predictions saved (console only for now)");
     });
-
-    // Event: Load my saved predictions (optional convenience)
-    loadMineBtn.addEventListener("click", async () => {
-      clearMsg();
-      const week = String($("#week").value || "").trim();
-      if (!week) return setMsg("Please enter a week number.", "warn");
-      if (!player) return setMsg("No player set. Go back to Part A.", "err");
-      try {
-        const data = await fetchJSON(`/api/predictions?week=${encodeURIComponent(week)}&player=${encodeURIComponent(player)}`);
-        applySavedPredictions(data);
-        setMsg("Loaded your saved predictions (if any).", "ok");
-      } catch(e) {
-        setMsg(e.message, "err");
-      }
-    });
-
-    // Event: Save predictions (includes PIN)
-    saveBtn.addEventListener("click", async () => {
-      clearMsg();
-      const week = String($("#week").value || "").trim();
-      if (!week) return setMsg("Please enter a week number.", "warn");
-      if (!player || !pin) return setMsg("Missing player or PIN. Go to Part A.", "err");
-
-      const predictions = collectPredictions();
-      if (predictions.length === 0) return setMsg("Enter at least one prediction.", "warn");
-
-      try {
-        const res = await fetch("/api/predictions/save", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ week, player, pin, predictions })
-        });
-        const data = await res.json().catch(()=> ({}));
-        if (!res.ok) {
-          // 423 means locked (kickoff passed)
-          if (res.status === 423) {
-            const which = data.fixture_id ? ` (${data.fixture_id})` : "";
-            return setMsg(`Predictions closed${which}.`, "err");
-          }
-          return setMsg(data.error || "Save failed.", "err");
-        }
-        setMsg("Predictions saved ✔", "ok");
-      } catch (e) {
-        setMsg(e.message || "Save failed.", "err");
-      }
-    });
-
-    // Auto-load fixtures for week in URL (?week=2) or default 1
-    (function bootstrap(){
-      const params = new URLSearchParams(location.search);
-      const w = params.get("week");
-      if (w) $("#week").value = w;
-    })();
   </script>
 </body>
 </html>

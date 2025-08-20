@@ -1,130 +1,72 @@
 const express = require('express');
-const router = express.Router();
-const fs = require('fs/promises');
+const fs = require('fs');
 const path = require('path');
+const router = express.Router();
 
-const DATA_DIR = path.join(__dirname, '..', 'data');
-const PLAYERS_FILE = path.join(DATA_DIR, 'players.json');
+const passwordsFile = path.join(__dirname, '..', 'data', 'passwords.json');
 
-// Helper: Load all players
-async function loadPlayers() {
+// Helper: read JSON
+function readPasswords() {
   try {
-    const data = await fs.readFile(PLAYERS_FILE, 'utf8');
-    return JSON.parse(data);
+    const raw = fs.readFileSync(passwordsFile);
+    return JSON.parse(raw);
   } catch (err) {
-    console.error('Failed to load players:', err);
-    return [];
+    return {};
   }
 }
 
-// Helper: Save all players
-async function savePlayers(players) {
-  try {
-    await fs.writeFile(PLAYERS_FILE, JSON.stringify(players, null, 2), 'utf8');
-  } catch (err) {
-    console.error('Failed to save players:', err);
-  }
+// Helper: write JSON
+function writePasswords(data) {
+  fs.writeFileSync(passwordsFile, JSON.stringify(data, null, 2));
 }
 
-// --- Register new player ---
-router.post('/player/register', async (req, res) => {
-  const { name, email } = req.body;
-  if (!name || !email) {
-    return res.status(400).json({ error: 'Missing name or email' });
+// Set password (only if not already set)
+router.post('/auth/set', (req, res) => {
+  const { name, password } = req.body;
+  if (!name || !password) {
+    return res.status(400).json({ error: 'Missing name or password' });
   }
 
-  const players = await loadPlayers();
-  const exists = players.find(p => p.name === name || p.email === email);
-  if (exists) {
-    return res.status(409).json({ error: 'Player already exists' });
+  const passwords = readPasswords();
+  if (passwords[name]) {
+    return res.status(409).json({ error: 'Password already set' });
   }
 
-  const newPlayer = {
-    id: Date.now().toString(),
-    name,
-    email,
-    pin: null
-  };
-
-  players.push(newPlayer);
-  await savePlayers(players);
-  res.json({ ok: true, player: newPlayer });
+  passwords[name] = password;
+  writePasswords(passwords);
+  res.json({ success: true });
 });
 
-// --- Update player info ---
-router.post('/player/update', async (req, res) => {
-  const { id, name, email } = req.body;
-  const players = await loadPlayers();
-  const player = players.find(p => p.id === id);
-
-  if (!player) {
-    return res.status(404).json({ error: 'Player not found' });
+// Verify password (login)
+router.post('/auth/verify', (req, res) => {
+  const { name, password } = req.body;
+  if (!name || !password) {
+    return res.status(400).json({ error: 'Missing name or password' });
   }
 
-  player.name = name ?? player.name;
-  player.email = email ?? player.email;
-
-  await savePlayers(players);
-  res.json({ ok: true, player });
+  const passwords = readPasswords();
+  if (passwords[name] === password) {
+    res.json({ success: true });
+  } else {
+    res.status(401).json({ error: 'Invalid credentials' });
+  }
 });
 
-// --- Delete player ---
-router.post('/player/delete', async (req, res) => {
-  const { id } = req.body;
-  let players = await loadPlayers();
-  const initialLength = players.length;
-  players = players.filter(p => p.id !== id);
-
-  if (players.length === initialLength) {
-    return res.status(404).json({ error: 'Player not found' });
+// Change password (must match current first)
+router.post('/auth/change', (req, res) => {
+  const { name, oldPassword, newPassword } = req.body;
+  if (!name || !oldPassword || !newPassword) {
+    return res.status(400).json({ error: 'Missing fields' });
   }
 
-  await savePlayers(players);
-  res.json({ ok: true });
-});
-
-// --- Set PIN for player ---
-router.post('/pin/set', async (req, res) => {
-  const { name, pin } = req.body;
-  const players = await loadPlayers();
-  const player = players.find(p => p.name === name);
-
-  if (!player) {
-    return res.status(404).json({ error: 'Player not found' });
+  const passwords = readPasswords();
+  if (passwords[name] !== oldPassword) {
+    return res.status(401).json({ error: 'Old password incorrect' });
   }
 
-  player.pin = pin;
-  await savePlayers(players);
-  res.json({ ok: true });
-});
-
-// --- Verify PIN login (name or email) ---
-router.post('/pin/verify', async (req, res) => {
-  const { nameOrEmail, pin } = req.body;
-
-  if (!nameOrEmail || !pin) {
-    return res.status(400).json({ error: 'Missing nameOrEmail or pin' });
-  }
-
-  try {
-    const players = await loadPlayers();
-    const input = nameOrEmail.toLowerCase();
-
-    const matchedPlayer = players.find(p => {
-      const nameMatch = p.name?.toLowerCase() === input;
-      const emailMatch = p.email?.toLowerCase() === input;
-      return (nameMatch || emailMatch) && p.pin === pin;
-    });
-
-    if (matchedPlayer) {
-      res.json({ ok: true, player_id: matchedPlayer.id, name: matchedPlayer.name });
-    } else {
-      res.status(401).json({ error: 'Invalid credentials' });
-    }
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Failed to verify PIN' });
-  }
+  passwords[name] = newPassword;
+  writePasswords(passwords);
+  res.json({ success: true });
 });
 
 module.exports = router;

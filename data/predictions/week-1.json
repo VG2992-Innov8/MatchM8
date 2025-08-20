@@ -2,17 +2,17 @@
   "1": {
     "predictions": [
       {
-        "fixture_id": "fixture_chelsea_liverpool",
-        "home_goals": 1,
-        "away_goals": 2
+        "id": "fixture_chelsea_liverpool",
+        "home": 7,
+        "away": 6
       },
       {
-        "fixture_id": "fixture_arsenal_spurs",
-        "home_goals": 2,
-        "away_goals": 1
+        "id": "fixture_arsenal_spurs",
+        "home": 4,
+        "away": 0
       }
     ],
-    "submitted_at": "2025-08-18T02:57:51.415Z",
-    "email_sent_at": "2025-08-17T01:56:03.142Z"
+    "submitted_at": "2025-08-01T12:00:00Z",
+    "email_sent_at": null
   }
 }

@@ -2,266 +2,420 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>MatchM8 — Admin</title>
+  <title>Admin — Week</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    :root { --border:#ddd; --muted:#666; --ok:#155724; --okbg:#e6f4ea; --err:#9b1c1c; --errbg:#fde8e8; }
-    * { box-sizing: border-box; }
-    body { font-family: system-ui, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; color:#111; }
-    h1 { margin: 0 0 12px; }
-    .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
-    .card { border:1px solid var(--border); border-radius:12px; padding:16px; background:#fff; margin-bottom:12px; }
+    :root { --bg:#fafafa; --card:#fff; --ink:#111; --muted:#666; --accent:#0b5cff; --danger:#ca2b2b; --ok:#1a7f37; --bd:#e6e6e6; }
+    body { margin:0; font:14px/1.35 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji"; color:var(--ink); background:var(--bg); }
+    .wrap { max-width: 980px; margin: 24px auto 64px; padding: 0 16px; }
+    h1 { margin: 0 0 8px; font-size: 28px; }
     .muted { color: var(--muted); }
-    input[type="number"] { width:90px; padding:6px 8px; border:1px solid var(--border); border-radius:8px; }
-    input[type="text"], input[type="file"], textarea { width:100%; padding:8px; border:1px solid var(--border); border-radius:8px; font-family:inherit; }
-    button { padding:9px 14px; border:1px solid var(--border); border-radius:10px; background:#fafafa; cursor:pointer; }
-    button:disabled { opacity:.6; cursor:not-allowed; }
-    table { width:100%; border-collapse: collapse; }
-    th, td { border:1px solid var(--border); padding:8px; text-align:left; }
-    .banner { display:none; margin: 8px 0 16px; padding:10px 12px; border-radius:10px; border:1px solid #b7e1b7; background: var(--okbg); color: var(--ok); }
-    .err { display:none; margin: 8px 0 16px; padding:10px 12px; border-radius:10px; border:1px solid #f5b5b5; background: var(--errbg); color: var(--err); }
-    .grid { display:grid; grid-template-columns: 1fr; gap:12px; }
-    @media (min-width: 1000px) { .grid { grid-template-columns: 1.1fr 0.9fr; } }
-    small { color:var(--muted); }
+    .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+    .card { background:var(--card); border:1px solid var(--bd); border-radius:12px; padding:16px; margin:14px 0; }
+    label { display:block; font-weight:600; margin:0 0 6px; }
+    input[type="text"], input[type="number"], textarea {
+      width:100%; padding:10px 12px; border:1px solid var(--bd); border-radius:8px; background:#fff; color:var(--ink);
+      font:inherit; outline:none;
+    }
+    textarea { min-height: 140px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    button {
+      padding:8px 12px; border:1px solid var(--bd); background:#fff; color:var(--ink);
+      border-radius:10px; cursor:pointer; font-weight:600;
+    }
+    button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+    button.ghost { background:transparent; }
+    .pill { padding:4px 8px; border-radius:999px; font-size:12px; border:1px solid var(--bd); }
+    .err { color:#fff; background: var(--danger); border:1px solid var(--danger); padding: 10px 12px; border-radius: 10px; margin-bottom:12px; }
+    .succ { color:#fff; background: var(--ok); border:1px solid var(--ok); padding: 10px 12px; border-radius: 10px; margin-bottom:12px; font-weight:700; }
+    .help { font-size:12px; color:var(--muted); margin-top:6px; }
+    .grid-2 { display:grid; grid-template-columns: 1fr 1fr; gap:14px; }
+    @media (max-width: 900px) { .grid-2 { grid-template-columns: 1fr; } }
+    .table { width:100%; border-collapse: collapse; }
+    .table th, .table td { border:1px solid var(--bd); padding:8px 10px; }
+    .right { text-align:right; }
   </style>
-
-  <script>
-  // --- Admin token helper: store in localStorage and auto-attach to /api/admin/* ---
-  (function () {
-    const getTok = () => (localStorage.getItem('mm8_admin_token') || '').trim();
-    const _fetch = window.fetch.bind(window);
-
-    window.fetch = (input, init = {}) => {
-      const tok = getTok();
-      if (!tok) return _fetch(input, init);
-
-      try {
-        const href = typeof input === 'string'
-          ? input
-          : (input && typeof input === 'object' && 'url' in input ? input.url : '');
-
-        if (!href || !href.includes('/api/admin/')) return _fetch(input, init);
-
-        const u = new URL(href, location.origin);
-        u.searchParams.set('admin_token', tok); // query param (belt)
-        init.headers = { ...(init.headers || {}), 'x-admin-token': tok }; // header (braces)
-
-        return _fetch(u.toString(), init);
-      } catch {
-        return _fetch(input, init);
-      }
-    };
-  })();
-  </script>
 </head>
 <body>
-  <h1>Admin — Week <span id="wk">?</span></h1>
+  <div class="wrap">
+    <div class="row">
+      <h1 id="title">Admin — Week <span id="weekTitle">?</span></h1>
+      <span id="devBadge" class="pill muted" title="ADMIN_TOKEN required">token required</span>
+    </div>
 
-  <div class="row" style="margin:6px 0 10px;">
-    <label>Week:
-      <input id="weekInput" type="number" min="1" step="1" style="width:90px; padding:6px 8px; border:1px solid var(--border); border-radius:8px;">
-    </label>
-    <button id="btnLoad">Load Preview</button>
-    <button id="btnCompute">Compute Scores</button>
-    <span id="csvHint" class="muted"></span>
-  </div>
+    <div id="topSuccess" class="succ" style="display:none;"></div>
+    <div id="topError" class="err" style="display:none;"></div>
 
-  <div class="row" style="margin:6px 0 12px;">
-    <input id="admTok" placeholder="Admin token" style="max-width:260px; padding:6px 8px; border:1px solid var(--border); border-radius:8px;">
-    <button id="saveTok">Use Token</button>
-    <small class="muted">Stored locally</small>
-  </div>
-
-  <div id="ok" class="banner"></div>
-  <div id="err" class="err"></div>
-
-  <div class="grid">
-    <!-- Fixtures + Results -->
     <div class="card">
-      <h3 style="margin-top:0;">Fixtures & Results</h3>
-      <div id="fixturesWrap" class="muted">No fixtures yet. Import on the right →</div>
-      <div style="margin-top:10px;">
-        <button id="btnSaveResults">Save Results</button>
-        <small class="muted">Enter goals and click Save. Then press Compute Scores.</small>
+      <div class="row" style="gap:8px;">
+        <label for="week" style="margin-right:6px;">Week:</label>
+        <input id="week" type="number" min="1" value="1" style="width:80px;" />
+        <button id="btnLoadPrev">Load Preview</button>
+        <button id="btnCompute">Compute Scores</button>
+      </div>
+      <div class="row" style="margin-top:10px; gap:8px;">
+        <input id="token" type="text" placeholder="your_admin_token_here" style="flex:1;max-width:360px;">
+        <button id="btnUseToken">Use Token</button>
+        <span id="tokenStatus" class="muted">Not set</span>
       </div>
     </div>
 
-    <!-- Import + Leaderboard -->
-    <div class="card">
-      <h3 style="margin-top:0;">Import Fixtures</h3>
-      <div class="row">
-        <input type="file" id="csvFile" accept=".csv,text/csv">
-        <button id="btnImportCsv">Import CSV</button>
+    <div id="previewCard" class="card">
+      <div class="row" style="justify-content:space-between;">
+        <strong>Fixtures & Results</strong>
+        <span id="previewStatus" class="muted">No preview loaded</span>
       </div>
-      <small class="muted">CSV headers: <code>id,home,away,kickoff_iso</code></small>
-      <hr style="border:none; border-top:1px solid var(--border); margin:12px 0;">
-      <small class="muted">Or paste JSON (either <code>[...]</code> or <code>{ fixtures:[...] }</code>)</small>
-      <textarea id="jsonText" rows="6" placeholder='[{"id":"1","home":"Arsenal","away":"Leeds","kickoff_iso":"2025-08-20T19:00:00Z"}]'></textarea>
-      <div class="row" style="margin-top:8px;">
-        <button id="btnImportJson">Import JSON</button>
-        <button id="btnSeed">Quick Seed 2 Future Fixtures</button>
+      <div id="previewEmpty" class="muted" style="margin-top:8px;">No fixtures yet. Import on the right →</div>
+      <div id="previewWrap" style="display:none; margin-top:10px;">
+        <table class="table" id="resultsTable">
+          <thead><tr><th>ID</th><th>Home</th><th>Away</th><th class="right">Home G</th><th class="right">Away G</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div class="row" style="margin-top:10px; justify-content:flex-end;">
+          <button id="btnSaveResults" class="primary">Save Results</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <strong>Import Fixtures</strong>
+        <div class="help">CSV headers: <code>id,home,away,kickoff_iso</code></div>
+        <div style="margin-top:10px;">
+          <input id="fileCsv" type="file" accept=".csv" />
+          <div class="row" style="margin-top:8px; gap:8px;">
+            <button id="btnImportCsv">Import CSV</button>
+          </div>
+        </div>
+        <div style="margin-top:14px;">
+          <label>Or paste JSON</label>
+          <textarea id="jsonBox" placeholder='[{"id":"1","home":"Arsenal","away":"Leeds","kickoff_iso":"2025-08-20T19:00:00Z"}]'></textarea>
+          <div class="row" style="margin-top:8px; gap:8px;">
+            <button id="btnImportJson">Import JSON</button>
+            <button id="btnQuickSeed">Quick Seed 2 Future Fixtures</button>
+          </div>
+        </div>
       </div>
 
-      <hr style="border:none; border-top:1px solid var(--border); margin:12px 0;">
-      <h3 style="margin-top:0;">Leaderboard (after compute)</h3>
-      <div id="leaderboard" class="muted">Run “Compute Scores” to refresh.</div>
+      <div class="card">
+        <strong>CSV Utilities</strong>
+        <div class="row" style="margin-top:10px; gap:8px; flex-wrap:wrap;">
+          <button id="btnPredsDownload">Download Predictions CSV</button>
+          <button id="btnScoresDownload">Download Season Scores CSV</button>
+        </div>
+        <div style="margin-top:12px;">
+          <label>Upload Predictions CSV</label>
+          <textarea id="csvPreds" placeholder='player_id,predictions,submitted_at,email_sent_at\n"abc123","[{\"home\":1,\"away\":0}]",2025-08-01T12:00:00Z,'></textarea>
+          <div class="row" style="margin-top:8px; gap:8px;">
+            <button id="btnPredsUpload">Upload Predictions</button>
+          </div>
+        </div>
+        <div style="margin-top:12px;">
+          <label>Upload Season Scores CSV</label>
+          <textarea id="csvScores" placeholder='player_id,name,total,weeks_played\n"abc123","Vince",12,1'></textarea>
+          <div class="row" style="margin-top:8px; gap:8px;">
+            <button id="btnScoresUpload">Upload Scores</button>
+          </div>
+        </div>
+      </div>
     </div>
+
   </div>
 
   <script>
-    // ---------- helpers ----------
+    /* ----------------- helpers ----------------- */
+    const $ = sel => document.querySelector(sel);
     const qs = new URLSearchParams(location.search);
-    let week = Number(qs.get('week') || 1);
-    const wkEl = document.getElementById('wk');
-    const weekInput = document.getElementById('weekInput');
+    const weekInput = $('#week');
+    const weekTitle = $('#weekTitle');
+    const devBadge = $('#devBadge');
+    const topError = $('#topError');
+    const topSuccess = $('#topSuccess');
+    const tokenInput = $('#token');
+    const tokenStatus = $('#tokenStatus');
 
-    function setWeek(n){ week = Number(n)||1; wkEl.textContent = week; weekInput.value = week; history.replaceState(null, '', `?week=${week}`); }
-    setWeek(week);
-
-    function fmt(dt){ const d=new Date(dt); return isNaN(d)? '-' : d.toLocaleString(); }
-    function ok(msg){ const e=document.getElementById('ok'); e.textContent=msg; e.style.display='block'; document.getElementById('err').style.display='none'; }
-    function err(msg){ const e=document.getElementById('err'); e.textContent=msg; e.style.display='block'; document.getElementById('ok').style.display='none'; }
-    function el(id){ return document.getElementById(id); }
-
-    // token UI
-    (function(){
-      const box = el('admTok'), btn = el('saveTok');
-      box.value = localStorage.getItem('mm8_admin_token') || '';
-      btn.addEventListener('click', () => {
-        localStorage.setItem('mm8_admin_token', box.value.trim());
-        location.reload();
-      });
-    })();
-
-    // ---------- preview / render ----------
-    let PREVIEW = { fixtures:[], results:{}, predictions:{} };
-
-    async function loadPreview(){
-      try{
-        const r = await fetch(`/api/admin/preview?week=${week}`);
-        const j = await r.json();
-        if(!r.ok || !j.ok){ err(j.error || 'Failed to load preview'); return; }
-        PREVIEW = j;
-        renderFixtures();
-        ok(`Loaded week ${week}`);
-      }catch(e){ err('Network error while loading preview'); }
+    function showErr(msg) {
+      topError.style.display = 'block';
+      topError.textContent = msg;
+      topSuccess.style.display = 'none';
+    }
+    function clearErr() {
+      topError.style.display = 'none';
+      topError.textContent = '';
+    }
+    function showOk(msg) {
+      topSuccess.style.display = 'block';
+      topSuccess.textContent = msg;
+      setTimeout(() => { topSuccess.style.display = 'none'; }, 2500);
     }
 
-    function renderFixtures(){
-      const wrap = el('fixturesWrap');
-      const fx = PREVIEW.fixtures || [];
-      if(!fx.length){ wrap.innerHTML = '<span class="muted">No fixtures yet.</span>'; return; }
-      let html = `<table><thead><tr>
-        <th>Id</th><th>Home</th><th>Away</th><th>Kickoff</th><th>HG</th><th>AG</th>
-      </tr></thead><tbody>`;
-      fx.forEach(f=>{
-        const r = (PREVIEW.results||{})[String(f.id)] || {};
-        html += `<tr>
+    function getWeek() { return Number(weekInput.value || 1); }
+    function setWeekFromQuery() {
+      const w = Number(qs.get('week') || 1);
+      weekInput.value = w; weekTitle.textContent = w;
+    }
+
+    function getToken() { return localStorage.getItem('admin_token') || ''; }
+    function setToken(t) {
+      if (t) localStorage.setItem('admin_token', t);
+      tokenInput.value = t || '';
+      tokenStatus.textContent = t ? 'Stored locally' : 'Not set';
+    }
+
+    async function apiFetch(url, opts = {}) {
+      const headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
+      const tok = getToken();
+      if (tok) headers['x-admin-token'] = tok; // ✅ header-based auth
+      const res = await fetch(url, { ...opts, headers });
+      if (!res.ok) {
+        const text = await res.text().catch(()=> '');
+        throw new Error(`${res.status} ${res.statusText} — ${text || 'request failed'}`);
+      }
+      const ct = res.headers.get('content-type') || '';
+      if (ct.includes('application/json')) return res.json();
+      return res.text();
+    }
+
+    // Probe with header (prevents noisy 401)
+    async function probeDevMode() {
+      try {
+        await apiFetch('/api/admin/health', { method: 'GET' });
+        devBadge.style.display = 'none';
+      } catch {
+        devBadge.textContent = 'token required';
+        devBadge.style.display = 'inline-block';
+      }
+    }
+
+    /* --------- preview (fixtures + results) --------- */
+    const previewEmpty = $('#previewEmpty');
+    const previewWrap = $('#previewWrap');
+    const previewStatus = $('#previewStatus');
+    const resultsTableBody = $('#resultsTable > tbody');
+
+    async function loadPreview() {
+      clearErr();
+      const week = getWeek();
+      weekTitle.textContent = week;
+
+      // Load results (if any)
+      try {
+        const res = await apiFetch(`/api/admin/results?week=${encodeURIComponent(week)}`, { method: 'GET' });
+        const results = (res && res.results) || {};
+        await renderResultsEditable(week, results);
+        previewStatus.textContent = 'Preview loaded';
+      } catch (e) {
+        showErr('Network error while loading preview: ' + e.message);
+      }
+    }
+
+    async function renderResultsEditable(week, resultsMap) {
+      // Load fixtures from file (if exists) to show IDs/home/away
+      let fixtures = [];
+      try {
+        const fx = await fetch(`/data/fixtures/season-2025/week-${week}.json`);
+        if (fx.ok) fixtures = await fx.json();
+      } catch {}
+
+      resultsTableBody.innerHTML = '';
+      if (!fixtures.length) {
+        previewEmpty.style.display = 'block';
+        previewWrap.style.display = 'none';
+        return;
+      }
+      previewEmpty.style.display = 'none';
+      previewWrap.style.display = 'block';
+
+      for (const f of fixtures) {
+        const tr = document.createElement('tr');
+        const r = resultsMap[f.id] || {};
+        tr.innerHTML = `
           <td>${f.id}</td>
-          <td>${f.home}</td>
-          <td>${f.away}</td>
-          <td>${fmt(f.kickoff_iso || f.kickoff)}</td>
-          <td><input type="number" min="0" id="hg-${f.id}" value="${Number.isFinite(r.homeGoals)? r.homeGoals : ''}"></td>
-          <td><input type="number" min="0" id="ag-${f.id}" value="${Number.isFinite(r.awayGoals)? r.awayGoals : ''}"></td>
-        </tr>`;
+          <td>${f.home || ''}</td>
+          <td>${f.away || ''}</td>
+          <td class="right"><input type="number" min="0" step="1" value="${(r.homeGoals ?? '')}" data-id="${f.id}" data-side="home" style="width:80px"></td>
+          <td class="right"><input type="number" min="0" step="1" value="${(r.awayGoals ?? '')}" data-id="${f.id}" data-side="away" style="width:80px"></td>
+        `;
+        resultsTableBody.appendChild(tr);
+      }
+    }
+
+    async function saveResults() {
+      clearErr();
+      const week = getWeek();
+      const inputs = resultsTableBody.querySelectorAll('input[data-id]');
+      const map = {};
+      inputs.forEach(inp => {
+        const id = String(inp.getAttribute('data-id'));
+        const side = inp.getAttribute('data-side'); // 'home' | 'away'
+        const v = inp.value === '' ? null : Number(inp.value);
+        if (!map[id]) map[id] = { homeGoals: null, awayGoals: null };
+        if (side === 'home') map[id].homeGoals = v;
+        if (side === 'away') map[id].awayGoals = v;
       });
-      html += `</tbody></table>`;
-      wrap.innerHTML = html;
+
+      const btn = document.getElementById('btnSaveResults');
+      btn.disabled = true; btn.textContent = 'Saving…';
+
+      try {
+        await apiFetch('/api/admin/results', {
+          method: 'POST',
+          body: JSON.stringify({ week, results: map })
+        });
+        previewStatus.textContent = 'Preview loaded • last action: saved';
+        showOk('✅ Results saved');
+        await loadPreview(); // re-read from disk
+      } catch (e) {
+        showErr('Failed saving results: ' + e.message);
+      } finally {
+        btn.disabled = false; btn.textContent = 'Save Results';
+      }
     }
 
-    // ---------- import fixtures ----------
-    async function importCsv(){
-      const f = el('csvFile').files[0];
-      if(!f){ err('Choose a CSV file first.'); return; }
-      const text = await f.text();
-      const r = await fetch(`/api/admin/fixtures/import?week=${week}`, {
-        method:'POST',
-        headers:{ 'content-type':'text/csv' },
-        body: text
+    /* ---------------- fixtures import ---------------- */
+    async function importFixturesFromCsvText(csvText) {
+      const rows = csvText.trim().split(/\r?\n/);
+      const headers = rows.shift().split(',').map(s => s.trim());
+      const idx = {
+        id: headers.indexOf('id'),
+        home: headers.indexOf('home'),
+        away: headers.indexOf('away'),
+        kickoff_iso: headers.indexOf('kickoff_iso'),
+      };
+      const fixtures = [];
+      for (const line of rows) {
+        if (!line.trim()) continue;
+        const cols = line.split(',').map(s => s.trim());
+        fixtures.push({
+          id: cols[idx.id],
+          home: cols[idx.home],
+          away: cols[idx.away],
+          kickoff_iso: cols[idx.kickoff_iso],
+        });
+      }
+      return fixtures;
+    }
+
+    async function importFixtures(fixtures) {
+      clearErr();
+      const week = getWeek();
+      try {
+        await apiFetch('/api/admin/fixtures/import', {
+          method: 'POST',
+          body: JSON.stringify({ week, fixtures })
+        });
+        showOk(`✅ Imported ${fixtures.length} fixtures`);
+        await loadPreview();
+      } catch (e) {
+        showErr('Import failed: ' + e.message);
+      }
+    }
+
+    /* ---------------- CSV utilities ---------------- */
+    async function downloadPredictionsCsv() {
+      clearErr();
+      const week = getWeek();
+      try {
+        const text = await apiFetch(`/api/admin/predictions/download?week=${encodeURIComponent(week)}`, { method: 'GET' });
+        const blob = new Blob([text], { type: 'text/csv' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `predictions-week-${week}.csv`; a.click();
+        URL.revokeObjectURL(a.href);
+      } catch (e) { showErr('Download failed: ' + e.message); }
+    }
+    async function uploadPredictionsCsv() {
+      clearErr();
+      const week = getWeek();
+      const csv = $('#csvPreds').value;
+      try {
+        await apiFetch('/api/admin/predictions/upload', {
+          method: 'POST',
+          body: JSON.stringify({ week, csv })
+        });
+        showOk('✅ Predictions uploaded');
+      } catch (e) { showErr('Upload failed: ' + e.message); }
+    }
+    async function downloadScoresCsv() {
+      clearErr();
+      try {
+        const text = await apiFetch('/api/admin/scores/download', { method: 'GET' });
+        const blob = new Blob([text], { type: 'text/csv' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `season-totals.csv`; a.click();
+        URL.revokeObjectURL(a.href);
+      } catch (e) { showErr('Download failed: ' + e.message); }
+    }
+    async function uploadScoresCsv() {
+      clearErr();
+      const csv = $('#csvScores').value;
+      try {
+        await apiFetch('/api/admin/scores/upload', {
+          method: 'POST',
+          body: JSON.stringify({ csv })
+        });
+        showOk('✅ Season scores uploaded');
+      } catch (e) { showErr('Upload failed: ' + e.message); }
+    }
+
+    /* ---------------- compute scores ---------------- */
+    async function computeScores() {
+      clearErr();
+      const week = getWeek();
+      try {
+        const r = await fetch(`/api/scores?week=${encodeURIComponent(week)}`);
+        if (r.ok) { showOk('✅ Scores computed (see leaderboard)'); return; }
+      } catch {}
+      try {
+        const r2 = await fetch(`/api/scores/compute?week=${encodeURIComponent(week)}`);
+        if (r2.ok) { showOk('✅ Scores computed'); return; }
+        showErr('Compute endpoint not available.');
+      } catch (e) { showErr('Compute failed: ' + e.message); }
+    }
+
+    /* ---------------- wire up ---------------- */
+    function wireEvents() {
+      $('#btnUseToken').addEventListener('click', () => setToken(tokenInput.value.trim()));
+      $('#btnLoadPrev').addEventListener('click', loadPreview);
+      $('#btnSaveResults').addEventListener('click', saveResults);
+
+      $('#btnImportCsv').addEventListener('click', async () => {
+        const f = $('#fileCsv').files[0]; if (!f) return showErr('Choose a CSV file first.');
+        const text = await f.text(); const fixtures = await importFixturesFromCsvText(text); await importFixtures(fixtures);
       });
-      const j = await r.json();
-      if(!r.ok || !j.ok){ err(j.error || 'Import failed'); return; }
-      ok(`Imported ${j.saved} fixtures for week ${j.week}.`);
-      loadPreview();
-    }
-
-    async function importJson(){
-      let data;
-      try{ data = JSON.parse(el('jsonText').value.trim()); }
-      catch(e){ err('JSON parse error'); return; }
-      const fixtures = Array.isArray(data) ? data : (Array.isArray(data.fixtures) ? data.fixtures : null);
-      if(!fixtures){ err('JSON must be an array or { fixtures:[...] }'); return; }
-      const r = await fetch(`/api/admin/fixtures/import?week=${week}`, {
-        method:'POST',
-        headers:{ 'content-type':'application/json' },
-        body: JSON.stringify({ fixtures })
+      $('#btnImportJson').addEventListener('click', async () => {
+        try {
+          const raw = $('#jsonBox').value.trim();
+          const fixtures = JSON.parse(raw);
+          const arr = Array.isArray(fixtures) ? fixtures : (fixtures.fixtures || []);
+          if (!Array.isArray(arr)) throw new Error('JSON must be an array or {fixtures:[...]}.');
+          await importFixtures(arr);
+        } catch (e) { showErr('Bad JSON: ' + e.message); }
       });
-      const j = await r.json();
-      if(!r.ok || !j.ok){ err(j.error || 'Import failed'); return; }
-      ok(`Imported ${j.saved} fixtures for week ${j.week}.`);
-      loadPreview();
-    }
-
-    async function seedTwo(){
-      const now = Date.now();
-      const fixtures = [
-        { id:"1", home:"Arsenal", away:"Leeds",    kickoff_iso:new Date(now+60*60*1000).toISOString() },
-        { id:"2", home:"Spurs",   away:"Brentford",kickoff_iso:new Date(now+2*60*60*1000).toISOString() }
-      ];
-      el('jsonText').value = JSON.stringify(fixtures, null, 2);
-      importJson();
-    }
-
-    // ---------- save results ----------
-    async function saveResults(){
-      const fx = PREVIEW.fixtures || [];
-      if(!fx.length){ err('No fixtures to save results for.'); return; }
-      const results = {};
-      fx.forEach(f=>{
-        const hg = Number(el(`hg-${f.id}`).value);
-        const ag = Number(el(`ag-${f.id}`).value);
-        if(Number.isFinite(hg) && Number.isFinite(ag)){
-          results[String(f.id)] = { homeGoals:hg, awayGoals:ag };
-        }
+      $('#btnQuickSeed').addEventListener('click', async () => {
+        const seed = [
+          { id: 'fixture_chelsea_liverpool', home:'Chelsea', away:'Liverpool', kickoff_iso: new Date(Date.now()+ 2*86400000).toISOString() },
+          { id: 'fixture_arsenal_spurs',     home:'Arsenal', away:'Spurs',     kickoff_iso: new Date(Date.now()+ 3*86400000).toISOString() },
+        ];
+        await importFixtures(seed);
       });
-      if(!Object.keys(results).length){ err('Enter some scores first.'); return; }
 
-      const r = await fetch(`/api/admin/results?week=${week}`, {
-        method:'POST',
-        headers:{ 'content-type':'application/json' },
-        body: JSON.stringify({ results })
-      });
-      const j = await r.json();
-      if(!r.ok || !j.ok){ err(j.error || 'Saving results failed'); return; }
-      ok(`Saved results for ${j.saved} fixture(s).`);
-      loadPreview();
+      $('#btnPredsDownload').addEventListener('click', downloadPredictionsCsv);
+      $('#btnPredsUpload').addEventListener('click', uploadPredictionsCsv);
+      $('#btnScoresDownload').addEventListener('click', downloadScoresCsv);
+      $('#btnScoresUpload').addEventListener('click', uploadScoresCsv);
+
+      $('#btnCompute').addEventListener('click', computeScores);
     }
 
-    // ---------- compute scores ----------
-    async function compute(){
-      const r = await fetch(`/api/admin/scores/compute?week=${week}`, { method:'POST' });
-      const j = await r.json();
-      if(!r.ok || !j.ok){ err(j.error || 'Compute failed'); return; }
-      ok(`Scores computed for week ${j.week}.`);
-      el('csvHint').textContent = `CSV: ${j.csv || 'data/season_scores.csv'}`;
-      const rows = j.leaderboard || [];
-      if(!rows.length){ el('leaderboard').textContent = 'No data yet.'; return; }
-      let html = '<table><thead><tr><th>Player</th><th>Total</th></tr></thead><tbody>';
-      rows.forEach(r=>{ html += `<tr><td>${r.name}</td><td>${r.total}</td></tr>`; });
-      html += '</tbody></table>';
-      el('leaderboard').innerHTML = html;
-    }
-
-    // ---------- events ----------
-    el('btnLoad').addEventListener('click', ()=>{ setWeek(weekInput.value); loadPreview(); });
-    el('btnImportCsv').addEventListener('click', importCsv);
-    el('btnImportJson').addEventListener('click', importJson);
-    el('btnSeed').addEventListener('click', seedTwo);
-    el('btnSaveResults').addEventListener('click', saveResults);
-    el('btnCompute').addEventListener('click', compute);
-
-    // auto-load on first visit
-    loadPreview();
+    /* ---------------- init ---------------- */
+    (async function init() {
+      setWeekFromQuery();
+      setToken(getToken());
+      wireEvents();
+      await probeDevMode();
+      try { await loadPreview(); } catch {}
+    })();
   </script>
 </body>
 </html>
