@@ -1,34 +1,40 @@
 ﻿<!doctype html>
-<html>
+<html lang="en">
 <head>
-  <link rel="icon" href="/favicon.ico">
-  <meta charset="utf-8" />
-  <title>MatchM8 — Season Leaderboard</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Season — MatchM8</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <h1>Season Leaderboard</h1>
-  <div id="meta" class="muted"></div>
+  <div id="hero" data-page="Season"></div>
+  <script src="/hero.js" defer></script>
 
-  <table class="table" id="seasonTable">
-    <thead>
-      <tr>
-        <th>#</th>
-        <th>Player</th>
-        <th class="mono">Total</th>
-        <th class="mono">Exact (5)</th>
-        <th class="mono">Result (2)</th>
-        <th class="mono">Weeks</th>
-        <th>By Week</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  </table>
+  <main class="container narrow">
+    <div class="panel">
+      <table class="table" id="tbl">
+        <thead><tr><th>Player</th><th>Total Points</th><th>Weeks Played</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </main>
 
-  <script defer src="/js/season_flow.js"></script>
+  <script>
+  async function loadSeason(){
+    try{
+      const res = await fetch('/data/scores/season-totals.json', {cache:'no-store'});
+      if (!res.ok) throw 0;
+      const totals = await res.json(); // { playerId: { name, total, weeks_played } }
+      const rows = Object.values(totals)
+        .sort((a,b)=> (b.total||0) - (a.total||0))
+        .map(p=>`<tr><td>${p.name}</td><td>${p.total ?? 0}</td><td>${p.weeks_played ?? ''}</td></tr>`)
+        .join('');
+      document.querySelector('#tbl tbody').innerHTML = rows;
+    }catch(e){
+      document.querySelector('#tbl tbody').innerHTML = '<tr><td colspan="3">No season totals yet.</td></tr>';
+    }
+  }
+  loadSeason();
+  </script>
 </body>
 </html>
-
-

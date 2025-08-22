@@ -250,7 +250,7 @@ throw new Error(`${res.status} ${res.statusText} - ${text || 'request failed'}`)
       if (weekTitleInline) weekTitleInline.textContent = week;
 
       try {
-        const res = await apiFetch(`/api/admin/results?week=${encodeURIComponent(week)}`, { method: 'GET' });
+        const res = await apiFetch(`/api/admin/results?week=\${encodeURIComponent(week)}`, { method: 'GET' });
         const results = (res && res.results) || {};
         await renderResultsEditable(week, results);
         previewStatus.textContent = 'Preview loaded';
@@ -263,7 +263,7 @@ throw new Error(`${res.status} ${res.statusText} - ${text || 'request failed'}`)
     async function renderResultsEditable(week, resultsMap) {
       let fixtures = [];
       try {
-        const fx = await fetch(`/data/fixtures/season-2025/week-${week}.json`, {cache:'no-store'});
+        const fx = await fetch(`/data/fixtures/season-2025/week-\${week}.json`, {cache:'no-store'});
         if (fx.ok) fixtures = await fx.json();
       } catch {}
 
@@ -363,7 +363,7 @@ throw new Error(`${res.status} ${res.statusText} - ${text || 'request failed'}`)
           method: 'POST',
           body: JSON.stringify({ week, fixtures })
         });
-        showOk(`✅ Imported ${fixtures.length} fixtures`);
+        showOk(\`✅ Imported \${fixtures.length} fixtures\`);
         await loadPreview();
       } catch (e) {
         showErr('Import failed: ' + e.message);
@@ -380,12 +380,12 @@ throw new Error(`${res.status} ${res.statusText} - ${text || 'request failed'}`)
       for (let i=0;i<n;i++){
         const idx = start + i;
         const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td>${idx}</td>
+        tr.innerHTML = \`
+          <td>\${idx}</td>
           <td><input class="input" name="home"></td>
           <td><input class="input" name="away"></td>
           <td><input class="input" type="date" name="date"></td>
-          <td><input class="input" type="time" name="time" step="60"></td>`;
+          <td><input class="input" type="time" name="time" step="60"></td>\`;
         tbody.appendChild(tr);
       }
     }
@@ -399,7 +399,7 @@ throw new Error(`${res.status} ${res.statusText} - ${text || 'request failed'}`)
       // Build new fixtures from the table
       const next = [];
       const seen = new Set();
-      const toIso = (d,t)=> (d && t) ? new Date(`${d}T${t}`).toISOString() : null;
+      const toIso = (d,t)=> (d && t) ? new Date(\`\${d}T\${t}\`).toISOString() : null;
 
       rows.forEach(tr=>{
         const home = tr.querySelector('input[name="home"]').value.trim();
@@ -407,8 +407,8 @@ throw new Error(`${res.status} ${res.statusText} - ${text || 'request failed'}`)
         const date = tr.querySelector('input[name="date"]').value;
         const time = tr.querySelector('input[name="time"]').value;
         if (!home || !away) return;
-        let base = `fixture_${slugify(home)}_${slugify(away)}`, id = base, n=1;
-        while (seen.has(id)) { n++; id = `${base}_${n}`; }
+        let base = \`fixture_\${slugify(home)}_\${slugify(away)}\`, id = base, n=1;
+        while (seen.has(id)) { n++; id = \`\${base}_\${n}\`; }
         seen.add(id);
         next.push({ id, home, away, kickoff_iso: toIso(date, time) });
       });
@@ -419,7 +419,7 @@ throw new Error(`${res.status} ${res.statusText} - ${text || 'request failed'}`)
       let fixtures = [];
       if (!replace) {
         try {
-          const res = await fetch(`/data/fixtures/season-2025/week-${week}.json?ts=${Date.now()}`, { cache:'no-store' });
+          const res = await fetch(\`/data/fixtures/season-2025/week-\${week}.json?ts=\${Date.now()}\`, { cache:'no-store' });
           if (res.ok) fixtures = await res.json();
         } catch {}
       }
@@ -452,7 +452,7 @@ throw new Error(`${res.status} ${res.statusText} - ${text || 'request failed'}`)
     /* ---------------- Manage Fixtures (delete rows) ---------------- */
     async function readWeekFixtures(week) {
       try {
-        const res = await fetch(`/data/fixtures/season-2025/week-${week}.json?ts=${Date.now()}`, {cache:'no-store'});
+        const res = await fetch(\`/data/fixtures/season-2025/week-\${week}.json?ts=\${Date.now()}\`, {cache:'no-store'});
         if (res.ok) return await res.json();
       } catch {}
       return [];
@@ -477,15 +477,15 @@ throw new Error(`${res.status} ${res.statusText} - ${text || 'request failed'}`)
       fixtures.forEach(f=>{
         const [ds,ts] = fmtDT(f.kickoff_iso);
         const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td>${f.id}</td>
-          <td>${f.home||''}</td>
-          <td>${f.away||''}</td>
-          <td>${ds}</td>
-          <td>${ts}</td>
+        tr.innerHTML = \`
+          <td>\${f.id}</td>
+          <td>\${f.home||''}</td>
+          <td>\${f.away||''}</td>
+          <td>\${ds}</td>
+          <td>\${ts}</td>
           <td class="right">
-            <button class="btn" data-action="del" data-id="${f.id}">Delete</button>
-          </td>`;
+            <button class="btn" data-action="del" data-id="\${f.id}">Delete</button>
+          </td>\`;
         tbody.appendChild(tr);
       });
     }
@@ -510,11 +510,11 @@ throw new Error(`${res.status} ${res.statusText} - ${text || 'request failed'}`)
       clearErr();
       const week = getWeek();
       try {
-        const text = await apiFetch(`/api/admin/predictions/download?week=${encodeURIComponent(week)}`, { method: 'GET' });
+        const text = await apiFetch(\`/api/admin/predictions/download?week=\${encodeURIComponent(week)}\`, { method: 'GET' });
         const blob = new Blob([text], { type: 'text/csv' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = `predictions-week-${week}.csv`; a.click();
+        a.download = \`predictions-week-\${week}.csv\`; a.click();
         URL.revokeObjectURL(a.href);
       } catch (e) { showErr('Download failed: ' + e.message); }
     }
@@ -537,7 +537,7 @@ throw new Error(`${res.status} ${res.statusText} - ${text || 'request failed'}`)
         const blob = new Blob([text], { type: 'text/csv' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = `season-totals.csv`; a.click();
+        a.download = \`season-totals.csv\`; a.click();
         URL.revokeObjectURL(a.href);
       } catch (e) { showErr('Download failed: ' + e.message); }
     }
@@ -558,11 +558,11 @@ throw new Error(`${res.status} ${res.statusText} - ${text || 'request failed'}`)
       clearErr();
       const week = getWeek();
       try {
-        const r = await fetch(`/api/scores?week=${encodeURIComponent(week)}`);
+        const r = await fetch(\`/api/scores?week=\${encodeURIComponent(week)}\`);
         if (r.ok) { showOk('✅ Scores computed (see leaderboard)'); return; }
       } catch {}
       try {
-        const r2 = await fetch(`/api/scores/compute?week=${encodeURIComponent(week)}`);
+        const r2 = await fetch(\`/api/scores/compute?week=\${encodeURIComponent(week)}\`);
         if (r2.ok) { showOk('✅ Scores computed'); return; }
         showErr('Compute endpoint not available.');
       } catch (e) { showErr('Compute failed: ' + e.message); }
@@ -635,4 +635,3 @@ throw new Error(`${res.status} ${res.statusText} - ${text || 'request failed'}`)
   </script>
 </body>
 </html>
-

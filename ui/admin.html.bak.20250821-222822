@@ -29,13 +29,12 @@
   <script src="/hero.js" defer></script>
 
   <main class="container wide">
-    <!-- Title / Token badge -->
+    <!-- Week controls + token -->
     <div class="panel" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
       <h1 id="title" style="margin:0">Admin — Week <span id="weekTitle">?</span></h1>
       <span id="devBadge" title="ADMIN_TOKEN required" style="color:var(--muted);font-weight:700">token required</span>
     </div>
 
-    <!-- Week controls + token -->
     <div class="panel">
       <div class="center" style="gap:8px; flex-wrap:wrap;">
         <label for="week" style="margin-right:6px;">Week:</label>
@@ -97,27 +96,10 @@
         <button id="btnBulkSubmit" class="btn primary">Submit Fixtures</button>
       </div>
 
-      <label class="center" style="gap:8px;margin-top:8px">
-        <input type="checkbox" id="replaceMode">
-        <span>Replace existing fixtures for Week <span id="wkRep">?</span> (don’t merge)</span>
-      </label>
-
       <div id="bulkBanner" class="banner ok" style="display:none;margin-top:8px">✅ Fixtures saved.</div>
     </div>
 
-    <!-- MANAGE FIXTURES: delete individual rows -->
-    <div class="panel" id="manageFixtures">
-      <strong>Manage Fixtures (Week <span id="wkManage">?</span>)</strong>
-      <div id="manageEmpty" style="margin-top:8px;color:var(--muted)">No fixtures yet.</div>
-      <table class="table" id="manageFixturesTbl" style="display:none;margin-top:8px">
-        <thead>
-          <tr><th>ID</th><th>Home</th><th>Away</th><th>Date</th><th>Time</th><th class="right">Actions</th></tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-
-    <!-- CSV UTILITIES -->
+    <!-- CSV UTILITIES: import/export tools -->
     <div class="panel">
       <strong>CSV Utilities</strong>
 
@@ -176,8 +158,6 @@
     const topSuccess = $('#topSuccess');
     const tokenInput = $('#token');
     const tokenStatus = $('#tokenStatus');
-    const wkRep = document.getElementById('wkRep');
-    const wkManage = document.getElementById('wkManage');
 
     function showErr(msg) {
       topError.style.display = 'block';
@@ -197,11 +177,7 @@
     function getWeek() { return Number(weekInput.value || 1); }
     function setWeekFromQuery() {
       const w = Number(qs.get('week') || 1);
-      weekInput.value = w; weekTitle.textContent = w;
-      const wStr = String(w);
-      if (weekTitleInline) weekTitleInline.textContent = wStr;
-      if (wkRep) wkRep.textContent = wStr;
-      if (wkManage) wkManage.textContent = wStr;
+      weekInput.value = w; weekTitle.textContent = w; weekTitleInline.textContent = w;
     }
 
     function getToken() { return localStorage.getItem('admin_token') || ''; }
@@ -217,9 +193,8 @@
       if (tok) headers['x-admin-token'] = tok; // header-based auth
       const res = await fetch(url, { ...opts, headers });
       if (!res.ok) {
-       const text = await res.text().catch(() => '');
-throw new Error(`${res.status} ${res.statusText} - ${text || 'request failed'}`);
-
+        const text = await res.text().catch(()=> '');
+        throw new Error(`${res.status} ${res.statusText} — ${text || 'request failed'}`);
       }
       const ct = res.headers.get('content-type') || '';
       if (ct.includes('application/json')) return res.json();
@@ -247,7 +222,7 @@ throw new Error(`${res.status} ${res.statusText} - ${text || 'request failed'}`)
       clearErr();
       const week = getWeek();
       weekTitle.textContent = week;
-      if (weekTitleInline) weekTitleInline.textContent = week;
+      weekTitleInline.textContent = week;
 
       try {
         const res = await apiFetch(`/api/admin/results?week=${encodeURIComponent(week)}`, { method: 'GET' });
@@ -257,7 +232,6 @@ throw new Error(`${res.status} ${res.statusText} - ${text || 'request failed'}`)
       } catch (e) {
         showErr('Network error while loading preview: ' + e.message);
       }
-      await renderManage(); // keep Manage table in sync
     }
 
     async function renderResultsEditable(week, resultsMap) {
@@ -276,27 +250,18 @@ throw new Error(`${res.status} ${res.statusText} - ${text || 'request failed'}`)
       previewEmpty.style.display = 'none';
       previewWrap.style.display = 'block';
 
-     for (const f of fixtures) {
-  const tr = document.createElement('tr');
-  const r = resultsMap[f.id] || {};
-  tr.innerHTML = `
-    <td>${f.id}</td>
-    <td>${f.home || ''}</td>
-    <td>${f.away || ''}</td>
-    <td class="right">
-      <input class="input" type="number" min="0" step="1"
-             value="${(r.homeGoals ?? '')}" data-id="${f.id}" data-side="home"
-             style="max-width:80px">
-    </td>
-    <td class="right">
-      <input class="input" type="number" min="0" step="1"
-             value="${(r.awayGoals ?? '')}" data-id="${f.id}" data-side="away"
-             style="max-width:80px">
-    </td>
-  `;
-  resultsTableBody.appendChild(tr);
-}
-
+      for (const f of fixtures) {
+        const tr = document.createElement('tr');
+        const r = resultsMap[f.id] || {};
+        tr.innerHTML = `
+          <td>${f.id}</td>
+          <td>${f.home || ''}</td>
+          <td>${f.away || ''}</td>
+          <td class="right"><input class="input" type="number" min="0" step="1" value="${(r.homeGoals ?? '')}" data-id="${f.id}" data-side="home" style="max-width:80px"></td>
+          <td class="right"><input class="input" type="number" min="0" step="1" value="${(r.awayGoals ?? '')}" data-id="${f.id}" data-side="away" style="max-width:80px"></td>
+        `;
+        resultsTableBody.appendChild(tr);
+      }
     }
 
     async function saveResults() {
@@ -333,7 +298,7 @@ throw new Error(`${res.status} ${res.statusText} - ${text || 'request failed'}`)
 
     /* ---------------- fixtures import helpers ---------------- */
     async function importFixturesFromCsvText(csvText) {
-      const rows = csvText.trim().split(/\\r?\\n/);
+      const rows = csvText.trim().split(/\r?\n/);
       const headers = rows.shift().split(',').map(s => s.trim());
       const idx = {
         id: headers.indexOf('id'),
@@ -396,9 +361,15 @@ throw new Error(`${res.status} ${res.statusText} - ${text || 'request failed'}`)
       const tbody = bulkTbody(); if (!tbody) return;
       const rows = Array.from(tbody.querySelectorAll('tr'));
 
-      // Build new fixtures from the table
+      // load existing fixtures
+      let fixtures = [];
+      try {
+        const res = await fetch(`/data/fixtures/season-2025/week-${week}.json?ts=${Date.now()}`, { cache:'no-store' });
+        if (res.ok) fixtures = await res.json();
+      } catch {}
+      const seen = new Set([...fixtures.map(f=>f.id)]);
       const next = [];
-      const seen = new Set();
+
       const toIso = (d,t)=> (d && t) ? new Date(`${d}T${t}`).toISOString() : null;
 
       rows.forEach(tr=>{
@@ -410,29 +381,15 @@ throw new Error(`${res.status} ${res.statusText} - ${text || 'request failed'}`)
         let base = `fixture_${slugify(home)}_${slugify(away)}`, id = base, n=1;
         while (seen.has(id)) { n++; id = `${base}_${n}`; }
         seen.add(id);
-        next.push({ id, home, away, kickoff_iso: toIso(date, time) });
+        const kickoff_iso = toIso(date, time);
+        next.push({ id, home, away, kickoff_iso });
       });
 
-      const replace = document.getElementById('replaceMode')?.checked;
-
-      // Start from existing only if NOT replacing
-      let fixtures = [];
-      if (!replace) {
-        try {
-          const res = await fetch(`/data/fixtures/season-2025/week-${week}.json?ts=${Date.now()}`, { cache:'no-store' });
-          if (res.ok) fixtures = await res.json();
-        } catch {}
-      }
-
-      if (replace) {
-        fixtures = next;                            // ✅ full replace
-      } else {
-        // Merge: replace by id or append
-        next.forEach(n=>{
-          const i = fixtures.findIndex(f=>f.id===n.id);
-          if (i>=0) fixtures[i]=n; else fixtures.push(n);
-        });
-      }
+      // merge replace/push
+      next.forEach(n=>{
+        const i = fixtures.findIndex(f=>f.id===n.id);
+        if (i>=0) fixtures[i]=n; else fixtures.push(n);
+      });
 
       try{
         await apiFetch('/api/admin/fixtures/import', {
@@ -441,69 +398,13 @@ throw new Error(`${res.status} ${res.statusText} - ${text || 'request failed'}`)
           body: JSON.stringify({ week, fixtures })
         });
         const b = document.getElementById('bulkBanner'); if (b){ b.style.display='block'; setTimeout(()=>b.style.display='none',1400); }
-        await loadPreview();     // refresh Results + Manage
-        // reset entry grid
-        const tb = bulkTbody(); tb.innerHTML=''; bulkAddRows(10);
+        await loadPreview();
+        bulkClear();
+        bulkAddRows(10);
       }catch(e){ showErr('Bulk submit failed: ' + e.message); }
     }
 
     function bulkClear(){ const tb = bulkTbody(); if (tb) tb.innerHTML=''; }
-
-    /* ---------------- Manage Fixtures (delete rows) ---------------- */
-    async function readWeekFixtures(week) {
-      try {
-        const res = await fetch(`/data/fixtures/season-2025/week-${week}.json?ts=${Date.now()}`, {cache:'no-store'});
-        if (res.ok) return await res.json();
-      } catch {}
-      return [];
-    }
-
-    function fmtDT(iso){
-      if(!iso) return ['',''];
-      const d = new Date(iso);
-      return [ d.toLocaleDateString(), d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) ];
-    }
-
-    async function renderManage(){
-      const week = getWeek();
-      if (wkManage) wkManage.textContent = String(week);
-      const fixtures = await readWeekFixtures(week);
-      const table = document.getElementById('manageFixturesTbl');
-      const empty = document.getElementById('manageEmpty');
-      const tbody = table.querySelector('tbody');
-      tbody.innerHTML='';
-      if(!fixtures.length){ table.style.display='none'; empty.style.display='block'; return; }
-      empty.style.display='none'; table.style.display='table';
-      fixtures.forEach(f=>{
-        const [ds,ts] = fmtDT(f.kickoff_iso);
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td>${f.id}</td>
-          <td>${f.home||''}</td>
-          <td>${f.away||''}</td>
-          <td>${ds}</td>
-          <td>${ts}</td>
-          <td class="right">
-            <button class="btn" data-action="del" data-id="${f.id}">Delete</button>
-          </td>`;
-        tbody.appendChild(tr);
-      });
-    }
-
-    async function deleteFixture(id){
-      clearErr();
-      const week = getWeek();
-      let fixtures = await readWeekFixtures(week);
-      fixtures = fixtures.filter(f => String(f.id) !== String(id));
-      try{
-        await apiFetch('/api/admin/fixtures/import', {
-          method:'POST',
-          body: JSON.stringify({ week, fixtures })
-        });
-        showOk('🗑️ Deleted ' + id);
-        await loadPreview();   // refresh Results + Manage
-      }catch(e){ showErr('Delete failed: ' + e.message); }
-    }
 
     /* ---------------- CSV utilities ---------------- */
     async function downloadPredictionsCsv() {
@@ -612,13 +513,6 @@ throw new Error(`${res.status} ${res.statusText} - ${text || 'request failed'}`)
       if (bAdd) bAdd.addEventListener('click', ()=>bulkAddRows(10));
       if (bClr) bClr.addEventListener('click', bulkClear);
       if (bSub) bSub.addEventListener('click', bulkSubmit);
-
-      // Manage Fixtures: row deletes (event delegation)
-      const mfTbl = document.getElementById('manageFixturesTbl');
-      if (mfTbl) mfTbl.addEventListener('click', (e)=>{
-        const btn = e.target.closest('button[data-action="del"]'); if (!btn) return;
-        deleteFixture(btn.dataset.id);
-      });
     }
 
     /* ---------------- init ---------------- */
@@ -629,10 +523,8 @@ throw new Error(`${res.status} ${res.statusText} - ${text || 'request failed'}`)
       // Start with 10 blank rows for Add Fixtures
       if (document.getElementById('addFixturesTbl')) bulkAddRows(10);
       await probeDevMode();
-      await renderManage();
       try { await loadPreview(); } catch {}
     })();
   </script>
 </body>
 </html>
-

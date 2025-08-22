@@ -1,14 +1,26 @@
 [
   {
-    "id": "fixture_chelsea_liverpool",
-    "home_team": "Chelsea",
-    "away_team": "Liverpool",
-    "kickoff": "2025-08-20T18:00:00Z"
+    "id": "fixture_man_utd_chelsea",
+    "home": "man utd",
+    "away": "chelsea",
+    "kickoff_iso": null
   },
   {
-    "id": "fixture_arsenal_spurs",
-    "home_team": "Arsenal",
-    "away_team": "Spurs",
-    "kickoff": "2025-08-21T19:00:00Z"
+    "id": "fixture_arsenal_liverpool",
+    "home": "arsenal",
+    "away": "liverpool",
+    "kickoff_iso": null
+  },
+  {
+    "id": "fixture_qpr_spurs",
+    "home": "QPR",
+    "away": "Spurs",
+    "kickoff_iso": null
+  },
+  {
+    "id": "fixture_newcastle_everton",
+    "home": "Newcastle",
+    "away": "Everton",
+    "kickoff_iso": null
   }
 ]

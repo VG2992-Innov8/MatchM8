@@ -1,123 +1,91 @@
 ﻿<!doctype html>
 <html lang="en">
 <head>
-  <link rel="icon" href="/favicon.ico">
-  <meta charset="utf-8" />
-  <title>Finalize Week — Scoring</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Scoring — MatchM8</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <div class="wrap">
-    <h1>Finalize Week — Scoring</h1>
+  <div id="hero" data-page="Scoring"></div>
+  <script src="/hero.js" defer></script>
 
-    <div id="msgOk" class="ok"></div>
-    <div id="msgErr" class="err"></div>
-
-    <div class="card">
-      <div class="row">
-        <label>Week <input id="week" type="number" min="1" value="1" /></label>
-        <label><input id="overwrite" type="checkbox" /> Overwrite if already scored</label>
-        <button id="btnCalc" class="primary">Calculate &amp; Save</button>
-        <button class="btn primary" id="btnPreview">Preview</button>
-        <a id="lnkPreds" href="/data/predictions/week-1.json" target="_blank">Open Predictions</a>
-      </div>
-      <div id="summary" class="muted" style="margin-top:10px;">—</div>
-
-      <div id="scoresWrap" style="display:none;">
-        <table class="table">
-          <thead><tr><th>#</th><th>Player</th><th class="r">Points</th></tr></thead>
-          <tbody id="scoresBody"></tbody>
-        </table>
-      </div>
+  <main class="container narrow">
+    <div class="panel center">
+      <label for="week" class="visually-hidden">Week</label>
+      <input id="week" class="input" type="number" min="1" value="1" style="max-width:120px">
+      <button id="preview" class="btn">Preview</button>
+      <button id="compute" class="btn primary">Calculate & Save</button>
+      <a id="toSeason" class="btn" href="/Part_E_Season.html">Season Leaderboard</a>
     </div>
-  </div>
+
+    <div id="ok" class="banner ok" style="display:none">✅ Done.</div>
+    <div id="tableWrap" class="panel" style="display:none">
+      <table class="table" id="scoresTbl">
+        <thead><tr><th>Player</th><th>Week Points</th><th>Season Total</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </main>
 
   <script>
-    // ---------- helpers ----------
-    const $ = s => document.querySelector(s);
-    const msgOk = $('#msgOk'), msgErr = $('#msgErr');
-    const weekInput = $('#week'), overwrite = $('#overwrite');
-    const summary = $('#summary'), scoresWrap = $('#scoresWrap'), scoresBody = $('#scoresBody'), lnkPreds = $('#lnkPreds');
+  const qs = new URLSearchParams(location.search);
+  const weekInput = document.getElementById('week');
+  weekInput.value = Number(qs.get('week')) || 1;
 
-    function showOk(t){ msgErr.style.display='none'; msgOk.textContent=t; msgOk.style.display='block'; }
-    function showErr(t){ msgOk.style.display='none'; msgErr.textContent=t; msgErr.style.display='block'; }
-    function clearMsgs(){ msgOk.style.display='none'; msgErr.style.display='none'; }
+  function setSeasonLink(){ document.getElementById('toSeason').href = '/Part_E_Season.html'; }
+  setSeasonLink();
 
-    function getWeek(){ return Number(weekInput.value || 1); }
-    function updateLinks(){ lnkPreds.href = `/data/predictions/week-${getWeek()}.json`; }
+  function normalizeWeekly(data){
+    // Expected: [{player_id,name,points}] — fallback to empty
+    if (Array.isArray(data)) return data.map(r=>({ name:r.name||'Player', week:r.points||0, total: r.total ?? '' }));
+    if (data && Array.isArray(data.week)) return data.week.map(r=>({ name:r.name, week:r.points, total:r.total ?? '' }));
+    return [];
+  }
 
-    async function apiJSON(url, opts = {}) {
-      const res = await fetch(url, Object.assign({ headers:{'Content-Type':'application/json'} }, opts));
-      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-      return res.json();
-    }
-
-    function renderSummary(data){
-      // supports either our new fields or aliases
-      const ft = data.fixturesWithFT ?? data.fixtures_with_ft ?? data.fixturesFT ?? data.fixtures_done ?? data.fixturesCompleted;
-      const total = data.totalFixtures ?? data.fixtures_total ?? data.total_fixtures ?? data.fixturesCount;
-      const ts = data.timestamp || new Date().toISOString();
-      summary.textContent = `Fixtures with FT: ${ft}/${total} — timestamp: ${ts}`;
-    }
-    function renderScores(list){
-      scoresBody.innerHTML = '';
-      if (!Array.isArray(list) || !list.length) {
-        scoresWrap.style.display = 'none';
-        return;
-      }
-      let rank = 0, lastPts = null;
-      list.forEach((row, i) => {
-        if (row.points !== lastPts) { rank = i + 1; lastPts = row.points; }
-        const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${rank}</td><td>${row.name || row.player_id}</td><td class="r">${row.points}</td>`;
-        scoresBody.appendChild(tr);
-      });
-      scoresWrap.style.display = 'block';
-    }
-
-    async function preview(){
-      clearMsgs();
-      try {
-        const w = getWeek();
-        const data = await apiJSON(`/api/scores/summary?week=${w}`);
-        renderSummary(data);
-        renderScores(data.scores);
-        showOk(`Preview ready for week ${w}`);
-      } catch (e) { showErr('Preview failed: ' + e.message); }
-    }
-
-    async function calcAndSave(){
-      clearMsgs();
-      try {
-        const w = getWeek();
-        const data = await apiJSON('/api/scores/calc', {
-          method: 'POST',
-          body: JSON.stringify({ week: w, overwrite: overwrite.checked })
+  async function showTable(rows){
+    // merge season totals if present
+    try{
+      const res = await fetch('/data/scores/season-totals.json', {cache:'no-store'});
+      if (res.ok){
+        const totals = await res.json(); // { playerId: { name, total } }
+        rows = rows.map(r=>{
+          const t = Object.values(totals).find(x=>x.name===r.name);
+          return {...r, total: t ? t.total : (r.total ?? '')};
         });
-        renderSummary(data);
-        renderScores(data.scores);
-        showOk(`✅ Saved week ${w}. Season totals updated.`);
-      } catch (e) { showErr('Save failed: ' + e.message); }
-    }
+      }
+    }catch{}
+    const tbody = document.querySelector('#scoresTbl tbody');
+    tbody.innerHTML = rows.map(r=>`<tr><td>${r.name}</td><td>${r.week ?? ''}</td><td>${r.total ?? ''}</td></tr>`).join('');
+    document.getElementById('tableWrap').style.display = 'block';
+  }
 
-    // ---------- wire ----------
-    $('#btnPreview').addEventListener('click', preview);
-    $('#btnCalc').addEventListener('click', calcAndSave);
-    weekInput.addEventListener('change', updateLinks);
+  async function preview(){
+    const w = Number(weekInput.value)||1;
+    let rows = [];
+    try{
+      let res = await fetch(`/api/scores/summary?week=${w}`, {cache:'no-store'});
+      if (!res.ok) res = await fetch(`/api/scores?week=${w}`, {cache:'no-store'});
+      const data = await res.json();
+      rows = normalizeWeekly(data);
+    }catch(e){ console.warn('Preview fallback', e); }
+    await showTable(rows);
+  }
 
-    // init
-    (function init(){
-      const params = new URLSearchParams(location.search);
-      const w = Number(params.get('week') || 1);
-      weekInput.value = w;
-      updateLinks();
-      // auto preview on open
-      preview().catch(()=>{});
-    })();
+  async function compute(){
+    const w = Number(weekInput.value)||1;
+    let res;
+    try{
+      res = await fetch(`/api/scores/calc?week=${w}`, {cache:'no-store'});
+      if (!res.ok) res = await fetch(`/api/scores/compute?week=${w}`, {cache:'no-store'});
+      const data = await res.json();
+      await showTable(normalizeWeekly(data));
+      const ok = document.getElementById('ok'); ok.style.display='block'; setTimeout(()=>ok.style.display='none',1500);
+    }catch(e){ console.error(e); }
+  }
+
+  document.getElementById('preview').addEventListener('click', preview);
+  document.getElementById('compute').addEventListener('click', compute);
   </script>
 </body>
 </html>
-
-

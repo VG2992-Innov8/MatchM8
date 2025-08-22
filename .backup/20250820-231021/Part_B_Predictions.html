@@ -1,0 +1,62 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <link rel="icon" href="/favicon.ico">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MatchM8 – Predictions</title>
+  
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="title-bar">MatchM8 Soccer Predictions</div>
+  <div class="league-bar" id="league-name-bar">English Premier League</div>
+  <div class="subtitle-bar" id="user-name-heading">Enter Predictions Below</div>
+
+  <form id="predictions-form" class="prediction-section">
+    <!-- Example Fixture Rows -->
+    <div class="fixture-row">
+      Chelsea 
+      <input type="number" class="score-input" name="chelsea_liverpool_home" min="0" max="10" value="0" />
+      vs
+      <input type="number" class="score-input" name="chelsea_liverpool_away" min="0" max="10" value="0" />
+      Liverpool
+    </div>
+
+    <div class="fixture-row">
+      Arsenal 
+      <input type="number" class="score-input" name="arsenal_spurs_home" min="0" max="10" value="0" />
+      vs
+      <input type="number" class="score-input" name="arsenal_spurs_away" min="0" max="10" value="0" />
+      Spurs
+    </div>
+
+    <button type="submit" class="matchm8-button">Submit Predictions</button>
+    <button type="button" onclick="location.href='index.html'" class="matchm8-button">Home</button>
+  </form>
+
+  <script>
+    // Get name from URL and update heading
+    const params = new URLSearchParams(window.location.search);
+    const name = params.get('nameOrEmail');
+    if (name) {
+      document.getElementById('user-name-heading').textContent = `${name}'s Predictions`;
+    }
+
+    // Temporary: log predictions to console
+    document.getElementById('predictions-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      const formData = new FormData(e.target);
+      const predictions = {};
+      formData.forEach((value, key) => {
+        predictions[key] = value;
+      });
+
+      console.log("Predictions submitted:", predictions);
+      alert("Predictions saved (console only for now)");
+    });
+  </script>
+</body>
+</html>
+
+
