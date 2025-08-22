@@ -24,6 +24,24 @@ const cookieParser = require('cookie-parser');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+const license = require('./lib/license');
+license.loadAndValidate().then(s => console.log('License:', s.reason));
+
+// Expose license status for UI (optional)
+app.get('/api/license/status', (req, res) => res.json(license.getStatus()) );
+
+// Require license for admin & scores
+app.use('/api/admin', (req, res, next) => {
+  const s = license.getStatus();
+  if (!s.ok) return res.status(403).json({ error: 'License invalid: ' + s.reason });
+  next();
+});
+app.use('/api/scores', (req, res, next) => {
+  const s = license.getStatus();
+  if (!s.ok) return res.status(403).json({ error: 'License invalid: ' + s.reason });
+  next();
+});
+
 /* -------------------- Global middleware -------------------- */
 // CORS allowlist via env: CORS_ORIGIN="http://localhost:3000,https://your.site"
 const ALLOW = (process.env.CORS_ORIGIN || '')
@@ -49,7 +67,7 @@ app.use(express.urlencoded({ extended: false }));
 
 // Static assets
 const join = (...p) => path.join(__dirname, ...p);
-app.use('/data', express.static(join('data')));      // expose JSON for preview
+app.use('/data', express.static(join('data'))); // expose JSON for preview (disable for prod if you like)
 app.use(express.static(join('public')));
 app.use('/ui', express.static(join('ui')));
 
@@ -106,7 +124,7 @@ if (auth.ok) {
   mount('./routes/auth.js', '/auth', auth.mod);
 }
 
-// Players (new)
+// Players (new; optional)
 const players = safeRequire('./routes/players.js', './routes/players');
 if (players.ok) {
   mount('./routes/players.js', '/api/players', players.mod);

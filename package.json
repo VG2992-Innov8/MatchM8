@@ -11,7 +11,8 @@
     "cron": "node jobs/cron.js"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.45.4",
+    "@supabase/supabase-js": "^2.56.0",
+    "archiver": "^7.0.1",
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
@@ -20,7 +21,9 @@
     "jsonwebtoken": "^9.0.2",
     "node-cron": "^3.0.3",
     "node-fetch": "^2.7.0",
+    "node-machine-id": "^1.1.12",
     "nodemailer": "^6.10.1",
+    "tweetnacl": "^1.0.3",
     "uuid": "^11.1.0"
   },
   "devDependencies": {

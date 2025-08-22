@@ -1,12 +1,10 @@
 {
-  "1": {
-    "homeGoals": 1,
-    "awayGoals": 0,
-    "result": "H"
-  },
-  "2": {
+  "fixture_chelsea_liverpool": {
     "homeGoals": 2,
-    "awayGoals": 0,
-    "result": "H"
+    "awayGoals": 1
+  },
+  "fixture_arsenal_spurs": {
+    "homeGoals": 1,
+    "awayGoals": 2
   }
 }

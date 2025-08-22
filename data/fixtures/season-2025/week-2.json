@@ -1,44 +1,14 @@
 [
   {
-    "id": "fixture_arsenal_leeds",
-    "home_team": "Arsenal",
-    "away_team": "Leeds",
-    "kickoff": "2025-08-17T02:43:47.160Z"
+    "id": "fixture_chelsea_liverpool",
+    "home": "Chelsea",
+    "away": "Liverpool",
+    "kickoff_iso": "2025-08-24T04:02:46.886Z"
   },
   {
-    "id": "fixture_spurs_brentford",
-    "home_team": "Spurs",
-    "away_team": "Brentford",
-    "kickoff": "2025-08-17T03:43:47.160Z"
-  },
-  {
-    "id": "fixture_liverpool_man_utd",
-    "home": "liverpool",
-    "away": "man utd",
-    "kickoff_iso": null
-  },
-  {
-    "id": "fixture_chelsea_spurs",
-    "home": "chelsea",
+    "id": "fixture_arsenal_spurs",
+    "home": "Arsenal",
     "away": "Spurs",
-    "kickoff_iso": null
-  },
-  {
-    "id": "fixture_everton_arsenal",
-    "home": "Everton",
-    "away": "arsenal",
-    "kickoff_iso": null
-  },
-  {
-    "id": "fixture_qpr_newcastle",
-    "home": "QPR",
-    "away": "Newcastle",
-    "kickoff_iso": null
-  },
-  {
-    "id": "fixture_man_utd_chelsea",
-    "home": "man utd",
-    "away": "chelsea",
-    "kickoff_iso": null
+    "kickoff_iso": "2025-08-25T04:02:46.887Z"
   }
 ]

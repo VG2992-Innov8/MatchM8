@@ -54,6 +54,30 @@
     <div id="topSuccess" class="banner ok" style="display:none;"></div>
     <div id="topError"   class="banner error" style="display:none;"></div>
 
+    <!-- License Status Banner -->
+<div id="licenseBanner" style="margin:12px 0; padding:10px; border:1px solid #1f2937; border-radius:6px; background:#e5f0ff;">
+  <strong>License:</strong> <span id="licText">Checking…</span>
+</div>
+
+<!-- Reset Player PIN (Admin) -->
+<div id="pinResetPanel" style="margin:12px 0; padding:12px; border:1px solid #d1d5db; border-radius:6px; background:#f9fafb;">
+  <div style="font-weight:600; margin-bottom:8px;">Reset Player PIN</div>
+  <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+    <label>ID or Name:
+      <input id="pinResetIdOrName" class="input" placeholder="player id or exact name" style="min-width:220px;">
+    </label>
+    <label>New PIN:
+      <input id="pinResetNew" class="input" type="password" placeholder="4+ digits" style="min-width:160px;">
+    </label>
+    <button id="pinResetBtn" class="btn">Set PIN</button>
+    <span id="pinResetMsg" style="margin-left:8px;"></span>
+  </div>
+  <div style="margin-top:8px;">
+    <button id="loadPlayersBtn" class="btn">Load Players</button>
+    <span id="playersSummary" style="margin-left:8px; opacity:.8;"></span>
+  </div>
+</div>
+
     <!-- RESULTS: auto-filled from fixtures for the week -->
     <div class="panel" id="previewCard">
       <div class="center" style="justify-content:space-between; width:100%;">
@@ -333,7 +357,7 @@ throw new Error(`${res.status} ${res.statusText} - ${text || 'request failed'}`)
 
     /* ---------------- fixtures import helpers ---------------- */
     async function importFixturesFromCsvText(csvText) {
-      const rows = csvText.trim().split(/\\r?\\n/);
+      const rows = csvText.trim().split(/\r?\n/);
       const headers = rows.shift().split(',').map(s => s.trim());
       const idx = {
         id: headers.indexOf('id'),
@@ -633,6 +657,93 @@ throw new Error(`${res.status} ${res.statusText} - ${text || 'request failed'}`)
       try { await loadPreview(); } catch {}
     })();
   </script>
+  <script>
+(async function(){
+  const licText = document.getElementById('licText');
+
+  async function refreshLicense() {
+    try {
+      const r = await fetch('/api/license/status');
+      const s = await r.json();
+      if (s.ok) {
+        const lic = s.license || {};
+        licText.textContent =
+          `OK — ${lic.edition || 'LR-?'} · ` +
+          `${(lic.customer && lic.customer.name) || 'Licensed'} · ` +
+          `Players: ${lic.max_players} · ` +
+          `Expires: ${new Date(lic.expires_utc).toLocaleDateString()}`;
+        // OPTIONAL: disable admin actions if not ok — here it's OK so ensure enabled:
+        toggleAdminButtons(true);
+      } else {
+        licText.textContent = `INVALID — ${s.reason}`;
+        toggleAdminButtons(false);
+      }
+    } catch (e) {
+      licText.textContent = 'Error reading license';
+      toggleAdminButtons(false);
+    }
+  }
+
+  // Adjust these selectors to match your actual button IDs:
+  function toggleAdminButtons(enabled){
+  ['btnCompute','btnSaveResults','btnBulkSubmit'].forEach(id=>{
+    const el = document.getElementById(id);
+    if (el) el.disabled = !enabled;
+  });
+}
+
+
+  // ----- PIN Reset -----
+  const $ = sel => document.querySelector(sel);
+  const msg = $('#pinResetMsg');
+  $('#pinResetBtn')?.addEventListener('click', async ()=>{
+    msg.textContent = '';
+    const idOrName = $('#pinResetIdOrName').value.trim();
+    const newPin = $('#pinResetNew').value.trim();
+    if (!idOrName || newPin.length < 4) {
+      msg.textContent = 'Enter player id/name and a 4+ digit PIN';
+      msg.style.color = 'crimson';
+      return;
+    }
+
+    // Detect numeric vs name
+    const body = /^\d+$/.test(idOrName)
+      ? { player_id: idOrName, new_pin: newPin }
+      : { name: idOrName, new_pin: newPin };
+
+    const res = await fetch('/api/admin/players/pin/reset', {
+      method:'POST',
+      headers: {
+        'Content-Type':'application/json',
+        'x-admin-token': localStorage.getItem('admin_token') || ''
+      },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (res.ok) {
+      msg.textContent = `PIN reset for ${data.name} (id ${data.id})`;
+      msg.style.color = 'green';
+      $('#pinResetNew').value = '';
+    } else {
+      msg.textContent = data.error || 'Reset failed';
+      msg.style.color = 'crimson';
+    }
+  });
+
+  // Quick players summary (no sensitive data)
+  $('#loadPlayersBtn')?.addEventListener('click', async ()=>{
+    const res = await fetch('/api/admin/players', {
+      headers: { 'x-admin-token': localStorage.getItem('admin_token') || '' }
+    });
+    const list = res.ok ? await res.json() : [];
+    const withPins = list.filter(p=>p.has_pin).length;
+    $('#playersSummary').textContent = `${list.length} players · ${withPins} have PINs set`;
+  });
+
+  await refreshLicense();
+})();
+</script>
+
 </body>
 </html>
 

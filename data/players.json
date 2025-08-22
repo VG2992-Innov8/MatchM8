@@ -2,8 +2,9 @@
   {
     "id": 1,
     "name": "Vince",
-    "pin": "1111",
-    "email": "vince@example.com"
+    "email": "vince@example.com",
+    "pin_hash": "$2a$10$9sGFYTWjORuOBXulYHRJc.MdXgG7XNIe3djrUKN7H01zptzXq2tEe",
+    "pin_updated_at": "2025-08-22T03:25:09.681Z"
   },
   {
     "id": 2,
