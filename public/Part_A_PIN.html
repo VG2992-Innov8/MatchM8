@@ -1,95 +1,163 @@
 ﻿<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Home — MatchM8</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Home — MatchM8 Soccer</title>
+  <link rel="icon" href="/favicon.ico">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
+  <!-- 3-line header (brand • league • page) is injected by hero.js -->
   <div id="hero" data-page="Home"></div>
+  <script src="/config.js"></script> <!-- optional; sets MATCHM8_BRAND / MATCHM8_LEAGUE -->
   <script src="/hero.js" defer></script>
 
-  <main class="container narrow">
-    <div class="home-grid">
-      <div class="action">
-        <button type="button" class="btn primary" data-target="#nameInput">Login Name</button>
-        <div class="input-inline" id="nameInput">
-          <input id="playerName" class="input" type="text" placeholder="Enter your name">
-        </div>
-      </div>
+  <main class="container">
+    <!-- License Status (read-only) -->
+    <div id="licenseBanner" class="panel" style="display:none">
+      <div id="licStatus" style="font-weight:700"></div>
+      <div id="licDetail" style="color:var(--muted)"></div>
+    </div>
 
-      <div class="action">
-        <button type="button" class="btn primary" data-target="#pinInput">Pin</button>
-        <div class="input-inline" id="pinInput">
-          <input id="playerPin" class="input" type="password" inputmode="numeric" pattern="[0-9]*" placeholder="Enter PIN">
-        </div>
+    <!-- Login Panel -->
+    <div class="panel">
+      <h2 style="margin-top:0">Sign in</h2>
+      <div class="center" style="gap:8px; flex-wrap:wrap; align-items:center;">
+        <label> Name<br>
+          <input id="loginName" class="input" placeholder="Your name (e.g. Vince)" style="min-width:240px">
+        </label>
+        <label> PIN<br>
+          <input id="loginPin" class="input" type="password" placeholder="4+ digits" style="min-width:160px">
+        </label>
+        <button id="btnLogin" class="btn primary" style="align-self:flex-end">Sign in</button>
+        <span id="loginMsg" style="margin-left:8px"></span>
+      </div>
+      <div style="margin-top:8px; color:var(--muted);">
+        Forgot your PIN? Ask your league admin to reset it on the Admin page.
       </div>
     </div>
 
-    <div class="action full">
-      <button type="button" id="continue" class="btn primary">Continue</button>
+    <!-- Self‑registration Panel -->
+    <div class="panel" id="signupPanel">
+      <h2 style="margin-top:0">New here? Create an account</h2>
+      <div class="center" style="gap:8px; flex-wrap:wrap; align-items:center;">
+        <label> Full name<br>
+          <input id="suName" class="input" placeholder="e.g. Alex Smith" style="min-width:240px">
+        </label>
+        <label> Email (optional)<br>
+          <input id="suEmail" class="input" placeholder="name@example.com" style="min-width:260px">
+        </label>
+        <label> Choose a PIN<br>
+          <input id="suPin" class="input" type="password" placeholder="4+ digits" style="min-width:200px">
+        </label>
+        <label> Invite code (if required)<br>
+          <input id="suInvite" class="input" placeholder="Invite code" style="min-width:180px">
+        </label>
+        <button id="btnSignup" class="btn" style="align-self:flex-end">Create account</button>
+        <span id="suMsg" style="margin-left:8px"></span>
+      </div>
     </div>
-
-    <div id="homeBanner" class="banner error" style="display:none;"></div>
   </main>
 
   <script>
-  // Toggle inputs under each button
-  document.addEventListener('click', (e) => {
-    const btn = e.target.closest('[data-target]');
-    if (!btn) return;
-    const target = document.querySelector(btn.getAttribute('data-target'));
-    if (!target) return;
-    const open = target.style.display === 'block';
-    target.style.display = open ? 'none' : 'block';
-    if (!open) { const i = target.querySelector('input'); if (i) i.focus(); }
-  });
+  // Helpers
+  const $ = (s) => document.querySelector(s);
+  function setMsg(el, text, ok){ el.textContent = text || ''; el.style.color = ok ? 'green' : 'crimson'; }
 
-  // Continue → (optionally) verify PIN, then go to Predictions
+  // License banner
+  (async function initLicense(){
+    try{
+      const r = await fetch('/api/license/status', { cache:'no-store' });
+      if(!r.ok) return;
+      const s = await r.json();
+      const box = $('#licenseBanner');
+      const a = $('#licStatus');
+      const b = $('#licDetail');
+      box.style.display = 'block';
+      if(s.ok){
+        const lic = s.license||{};
+        a.textContent = `License OK — ${lic.edition||''} • Players: ${lic.max_players||0}`;
+        b.textContent = `Expires: ${lic.expires_utc? new Date(lic.expires_utc).toLocaleDateString(): '—'}`;
+      } else {
+        a.textContent = 'License INVALID';
+        b.textContent = s.reason || '';
+      }
+    }catch{}
+  })();
 
-async function verifyAndGo(){
-  const name   = (document.getElementById('playerName').value || '').trim();
-  const pin    = (document.getElementById('playerPin').value || '').trim();
-  const banner = document.getElementById('homeBanner');
+  // Login
+  async function doLogin(){
+    const name = $('#loginName').value.trim();
+    const pin  = $('#loginPin').value.trim();
+    const msgEl = $('#loginMsg'); setMsg(msgEl, '');
+    if(!name || pin.length < 4){ return setMsg(msgEl, 'Enter your name and a 4+ digit PIN.', false); }
+    try{
+      const r = await fetch('/api/auth/pin/verify', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ name, pin })
+      });
+      const j = await r.json();
+      if(!r.ok || !j.ok) throw new Error(j.error || 'invalid');
 
-  if (!name || !pin){
-    banner.textContent = 'Please enter both Login Name and PIN.';
-    banner.style.display = 'block';
-    setTimeout(()=>banner.style.display='none', 2000);
-    return;
+      // Stash minimal identity for UX (not security)
+      try{ localStorage.setItem('player_name', j.name); localStorage.setItem('player_id', j.id); }catch{}
+
+      // Admin shortcut: if name is "Admin", go to Admin UI. Everyone else → predictions
+      if(/^admin$/i.test(name)) { location.href = '/ui/admin.html'; }
+      else { location.href = '/Part_B_Predictions.html'; }
+    }catch(e){
+      const map = {
+        'player not found': 'No such player. Check spelling or create an account.',
+        'no PIN set': 'No PIN set yet. Ask your admin to set or reset your PIN.',
+        'invalid PIN': 'That PIN didn\'t match. Try again.',
+      };
+      setMsg(msgEl, map[e.message] || 'Sign in failed.', false);
+    }
   }
+  $('#btnLogin').addEventListener('click', doLogin);
+  $('#loginPin').addEventListener('keydown', e=>{ if(e.key==='Enter') doLogin(); });
 
-  // ✅ Admin shortcut: go straight to Admin page
-  if (/^admin$/i.test(name)) {
-    // keep your dev flow storage (don’t store real PINs in prod)
-    localStorage.setItem('player_name', name);
-    localStorage.setItem('player_pin', pin);
+  // Signup
+  async function selfSignup(){
+    const name   = $('#suName').value.trim();
+    const email  = $('#suEmail').value.trim();
+    const pin    = $('#suPin').value.trim();
+    const invite = $('#suInvite').value.trim();
+    const msgEl  = $('#suMsg'); setMsg(msgEl, '');
 
-    // If the PIN you typed is actually your ADMIN_TOKEN,
-    // this pre-fills the token field on Admin (your page already reads ?token=…)
-    const maybeToken = pin.length > 8 ? `?token=${encodeURIComponent(pin)}` : '';
-    location.href = `/ui/admin.html${maybeToken}`;
-    return;
+    if(!name || pin.length<4) return setMsg(msgEl, 'Enter a name and a 4+ digit PIN.', false);
+
+    try{
+      const r = await fetch('/api/players/register', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ name, email, pin, invite_code: invite })
+      });
+      const j = await r.json();
+      if(!r.ok || !j.ok) throw new Error(j.error || 'sign_up_failed');
+
+      // Auto-login after creating
+      const v = await fetch('/api/auth/pin/verify', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ name, pin })
+      });
+      if(v.ok){ setMsg(msgEl, 'Account created! Redirecting…', true); setTimeout(()=> location.href='/Part_B_Predictions.html', 400); }
+      else { setMsg(msgEl, 'Account created. Please sign in above.', true); }
+    }catch(e){
+      const map = {
+        name_taken: 'That name is already taken.',
+        pin_too_short: 'PIN must be at least 4 digits.',
+        email_invalid_or_domain: 'Email looks invalid or not allowed.',
+        max_players_reached: 'Player limit reached for this license.',
+        bad_invite_code: 'Invite code is incorrect.',
+        self_signup_disabled: 'Self-registration is currently disabled.',
+        license_invalid: 'License not valid yet. Contact the organizer.'
+      };
+      setMsg(msgEl, map[e.message] || 'Could not create account.', false);
+    }
   }
-
-  // Normal user flow → Predictions
-  try {
-    // optional server verify; ignore failures in dev
-    const res = await fetch('/api/auth/pin/verify', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ name, pin })
-    });
-    if (!res.ok) console.warn('PIN verify not OK, continuing in dev');
-  } catch (e) { console.warn('PIN verify failed (dev?)', e); }
-
-  localStorage.setItem('player_name', name);
-  localStorage.setItem('player_pin', pin);
-  location.href = '/Part_B_Predictions.html';
-}
-document.getElementById('continue').addEventListener('click', verifyAndGo);
-</script>
-
+  $('#btnSignup').addEventListener('click', selfSignup);
+  $('#suPin').addEventListener('keydown', e=>{ if(e.key==='Enter') selfSignup(); });
+  </script>
 </body>
 </html>

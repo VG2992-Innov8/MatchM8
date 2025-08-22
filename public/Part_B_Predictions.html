@@ -11,6 +11,7 @@
   <script src="/hero.js" defer></script>
 
   <main class="container wide">
+    <h2 id="weekLabel" class="subhead"></h2>
     <div class="panel">
       <div class="center">
         <label for="week" class="visually-hidden">Week</label>
@@ -29,6 +30,25 @@
   const qs = new URLSearchParams(location.search);
   const weekInput = document.getElementById('week');
   weekInput.value = Number(qs.get('week')) || 1;
+
+  (async () => {
+  try {
+    const cfg = await fetch('/api/config').then(r => r.json());
+    const urlWeek = Number(new URL(location.href).searchParams.get('week'));
+    const currentWeek = Number.isFinite(urlWeek) ? urlWeek : (cfg.current_week || 1);
+    const totalWeeks = cfg.total_weeks || 38;
+
+    document.getElementById('weekLabel').textContent = `Week ${currentWeek} of ${totalWeeks}`;
+
+    // Store for other scripts if needed
+    window.CURRENT_WEEK = currentWeek;
+    window.TOTAL_WEEKS = totalWeeks;
+  } catch (e) {
+    console.warn("Could not fetch config.json", e);
+    document.getElementById('weekLabel').textContent = "Week ?";
+  }
+})();
+
 
   function setScoringLink(){
     document.getElementById('toScoring').href = `/Part_D_Scoring.html?week=${weekInput.value}`;

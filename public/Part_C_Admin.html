@@ -1,121 +1,189 @@
 ﻿<!doctype html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>MatchM8 — Part C Admin</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Admin — MatchM8</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <h1>Part C — Admin: Enter Final Scores</h1>
+  <div id="hero" data-page="Admin"></div>
+  <script src="/hero.js" defer></script>
 
-  <div class="row">
-    <label>Week:
-      <input id="week" type="number" min="1" step="1" value="1" />
-    </label>
-    <button class="btn" id="load">Load Fixtures</button>
-    <button class="btn" id="save" disabled>Save Updates</button>
-    <span id="status"></span>
-  </div>
+  <main class="container wide">
+    <!-- Access banner -->
+    <div id="access" class="panel" style="display:none">
+      <div class="ok">✅ Admin access granted.</div>
+    </div>
 
-  <table class="table" id="tbl">
-    <thead>
-      <tr>
-        <th>ID</th>
-        <th>Home</th>
-        <th>Away</th>
-        <th>Kickoff (local)</th>
-        <th>FT Home</th>
-        <th>FT Away</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  </table>
+    <!-- Season Settings -->
+    <section class="panel">
+      <h2>Season Settings</h2>
+      <div class="grid" style="grid-template-columns: repeat(4,minmax(160px,1fr)); gap:12px;">
+        <label>Season
+          <input id="season" class="input" type="number" min="2000" value="2025">
+        </label>
+        <label>Total Weeks
+          <input id="totalWeeks" class="input" type="number" min="1" value="38">
+        </label>
+        <label>Current Week
+          <div class="row" style="gap:8px">
+            <button id="wkMinus" class="btn" type="button">−</button>
+            <input id="currentWeek" class="input" type="number" min="1" value="1" style="max-width:90px;text-align:center">
+            <button id="wkPlus" class="btn" type="button">+</button>
+          </div>
+        </label>
+        <label>Time Zone
+          <input id="tz" class="input" type="text" value="Australia/Melbourne" placeholder="IANA tz e.g. Australia/Melbourne">
+        </label>
+      </div>
+
+      <div class="row" style="margin-top:12px; gap:8px">
+        <label style="display:inline-flex; align-items:center; gap:8px">
+          Lock mins before kickoff
+          <input id="lockMins" class="input" type="number" min="0" value="10" style="max-width:90px">
+        </label>
+
+        <label style="display:inline-flex; align-items:center; gap:8px">
+          Deadline mode
+          <select id="deadlineMode" class="input">
+            <option value="first_kickoff">Lock entire week at first kickoff</option>
+            <option value="per_match">Lock per match</option>
+          </select>
+        </label>
+
+        <button id="saveSeason" class="btn primary" type="button">Save Season Settings</button>
+      </div>
+
+      <div id="saveMsg" class="banner ok" style="display:none;margin-top:10px;">Saved.</div>
+    </section>
+
+    <!-- Quick Actions -->
+    <section class="panel">
+      <h3>Quick Actions</h3>
+      <div class="row" style="gap:8px; flex-wrap:wrap">
+        <a class="btn" href="/Part_A_PIN.html">Home (PIN)</a>
+        <a id="toPred" class="btn" href="/Part_B_Predictions.html">Predictions (Week)</a>
+        <a id="toScore" class="btn" href="/Part_D_Scoring.html">Scoring (Week)</a>
+        <a class="btn" href="/Part_E_Season.html">Season Leaderboard</a>
+      </div>
+    </section>
+
+    <!-- Diagnostics -->
+    <section class="panel">
+      <h3>Diagnostics</h3>
+      <div class="row" style="gap:8px; flex-wrap:wrap">
+        <button id="healthBtn" class="btn" type="button">Check Admin Health</button>
+        <button id="routesBtn" class="btn" type="button">List API Routes</button>
+      </div>
+      <pre id="diag" style="margin-top:8px; max-height:260px; overflow:auto; background:#111; color:#9fe; padding:10px; border-radius:8px;"></pre>
+    </section>
+  </main>
 
   <script>
-    const $ = s => document.querySelector(s);
-    const tbody = $("#tbl tbody");
-    const status = $("#status");
-    const loadBtn = $("#load");
-    const saveBtn = $("#save");
+    // --- helpers ---
+    const $ = sel => document.querySelector(sel);
+    const show = (el, on=true) => el.style.display = on ? '' : 'none';
+    const getToken = () => localStorage.getItem('adminToken') || '';
 
-    loadBtn.addEventListener("click", async () => {
-      const week = String($("#week").value || "").trim();
-      status.textContent = "";
-      tbody.innerHTML = "";
-      saveBtn.disabled = true;
+    function setQuickLinks(week) {
+      $('#toPred').href = `/Part_B_Predictions.html?week=${week}`;
+      $('#toScore').href = `/Part_D_Scoring.html?week=${week}`;
+    }
 
-      const res = await fetch(`/api/fixtures?week=${encodeURIComponent(week)}`);
-      if (!res.ok) { msg("Failed to load fixtures", true); return; }
-      const data = await res.json();
-      render(data.fixtures);
-      saveBtn.disabled = false;
-    });
+    async function getJSON(url, opts={}) {
+      const res = await fetch(url, opts);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    }
 
-    saveBtn.addEventListener("click", async () => {
-      const week = String($("#week").value || "").trim();
-      const updates = Array.from(tbody.querySelectorAll("tr")).map(tr => {
-        const id = tr.dataset.id;
-        const koVal = tr.querySelector(".ko").value;
-        const ftH = tr.querySelector(".ft_home").value;
-        const ftA = tr.querySelector(".ft_away").value;
-        return {
-          id,
-          kickoff: koVal ? toISOWithLocalOffset(koVal) : "",
-          ft_home: ftH,
-          ft_away: ftA
-        };
+    // --- load config into form ---
+    async function loadSeason() {
+      const cfg = await getJSON('/api/config');
+      $('#season').value       = cfg.season ?? 2025;
+      $('#totalWeeks').value   = cfg.total_weeks ?? 38;
+      $('#currentWeek').value  = cfg.current_week ?? 1;
+      $('#lockMins').value     = cfg.lock_minutes_before_kickoff ?? 10;
+      $('#deadlineMode').value = cfg.deadline_mode || 'first_kickoff';
+      $('#tz').value           = cfg.timezone || 'Australia/Melbourne';
+      setQuickLinks(Number($('#currentWeek').value) || 1);
+    }
+
+    // --- save config from form ---
+    async function saveSeason() {
+      const payload = {
+        season: Number($('#season').value) || 2025,
+        total_weeks: Number($('#totalWeeks').value) || 38,
+        current_week: Number($('#currentWeek').value) || 1,
+        lock_minutes_before_kickoff: Number($('#lockMins').value) || 0,
+        deadline_mode: $('#deadlineMode').value,
+        timezone: $('#tz').value || 'Australia/Melbourne'
+      };
+
+      const res = await fetch('/api/config', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-token': getToken()
+        },
+        body: JSON.stringify(payload)
       });
 
-      const res = await fetch("/api/fixtures/update", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ week, updates })
-      });
-      if (!res.ok) {
-        const e = await res.json().catch(()=>({}));
-        msg("Save failed" + (e.error ? `: ${e.error}` : ""), true);
-        return;
+      if (!res.ok) throw new Error(`Save failed (${res.status})`);
+      show($('#saveMsg'), true);
+      setTimeout(()=> show($('#saveMsg'), false), 1400);
+      setQuickLinks(payload.current_week);
+    }
+
+    // --- week bumpers ---
+    function bumpWeek(delta) {
+      const tw = Number($('#totalWeeks').value) || 38;
+      let cw = Number($('#currentWeek').value) || 1;
+      cw = Math.min(Math.max(1, cw + delta), tw);
+      $('#currentWeek').value = cw;
+      setQuickLinks(cw);
+    }
+
+    // --- diagnostics ---
+    async function checkHealth() {
+      try {
+        const data = await getJSON('/api/admin/health', {
+          headers: { 'x-admin-token': getToken() }
+        });
+        $('#diag').textContent = JSON.stringify(data, null, 2);
+      } catch (e) {
+        $('#diag').textContent = 'Health check failed: ' + e.message;
       }
-      msg("Saved ✔");
-    });
-
-    function render(fixtures){
-      tbody.innerHTML = fixtures.map(f => `
-        <tr data-id="${f.id}">
-          <td>${f.id}</td>
-          <td>${f.home}</td>
-          <td>${f.away}</td>
-          <td><input type="datetime-local" class="ko" value="${toLocalInputValue(f.kickoff)}"></td>
-          <td><input type="number" class="ft_home" min="0" step="1" value="${numOrEmpty(f.ft_home)}"></td>
-          <td><input type="number" class="ft_away" min="0" step="1" value="${numOrEmpty(f.ft_away)}"></td>
-        </tr>
-      `).join("");
     }
 
-    function numOrEmpty(v){ return (v === null || v === undefined || Number.isNaN(v)) ? "" : v; }
+    async function listRoutes() {
+      try {
+        const data = await getJSON('/api/__routes');
+        $('#diag').textContent = JSON.stringify(data, null, 2);
+      } catch (e) {
+        $('#diag').textContent = 'Routes query failed: ' + e.message;
+      }
+    }
 
-    function toLocalInputValue(iso){
-      if (!iso) return "";
-      const d = new Date(iso);
-      if (isNaN(d)) return "";
-      const pad = n => String(n).padStart(2,"0");
-      return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate())+"T"+pad(d.getHours())+":"+pad(d.getMinutes());
-    }
-    function toISOWithLocalOffset(localStr){
-      // localStr: 'YYYY-MM-DDTHH:mm' -> ISO with local offset baked in
-      const d = new Date(localStr);
-      if (isNaN(d)) return "";
-      const t = new Date(d.getTime() - (d.getTimezoneOffset() * 60000)).toISOString();
-      return t.replace(".000Z", "");
-    }
-    function msg(text, isErr=false){
-      status.textContent = text;
-      status.className = isErr ? "err" : "ok";
-    }
+    // --- boot ---
+    (async function init(){
+      // verify token by pinging admin health; only show banner if OK
+      try {
+        const ok = await fetch('/api/admin/health', { headers:{ 'x-admin-token': getToken() }});
+        if (ok.status === 200) show($('#access'), true);
+      } catch {}
+
+      await loadSeason();
+
+      // wire buttons
+      $('#saveSeason').addEventListener('click', saveSeason);
+      $('#wkPlus').addEventListener('click', () => bumpWeek(+1));
+      $('#wkMinus').addEventListener('click', () => bumpWeek(-1));
+      $('#currentWeek').addEventListener('change', e => setQuickLinks(Number(e.target.value)||1));
+
+      $('#healthBtn').addEventListener('click', checkHealth);
+      $('#routesBtn').addEventListener('click', listRoutes);
+    })();
   </script>
 </body>
 </html>
-
-
