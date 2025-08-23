@@ -1,95 +1,124 @@
-// routes/players.js — public player registration (with license + env guards)
+// routes/players.js — self-signup + name checks + demo cap
 const express = require('express');
 const path = require('path');
-const fs = require('fs/promises');
+const fs = require('fs');
 const bcrypt = require('bcryptjs');
-const { v4: uuidv4 } = require('uuid');            // already in your deps
 const { writeJsonAtomic } = require('../utils/atomicJson');
 const license = require('../lib/license');
 
 const router = express.Router();
+
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const PLAYERS_PATH = path.join(DATA_DIR, 'players.json');
 
-function envFlag(name, def=false) {
-  const v = String(process.env[name] || '').trim().toLowerCase();
-  if (!v) return def;
-  return ['1','true','yes','y','on'].includes(v);
+// ---------- helpers ----------
+function ensureDataDir() {
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 }
-const ALLOW_SELF_SIGNUP = envFlag('ALLOW_SELF_SIGNUP', false);
-const INVITE_CODE_REQ   = (process.env.INVITE_CODE || '').trim();
-const EMAIL_DOMAIN      = (process.env.WHITELIST_EMAIL_DOMAIN || '').trim().toLowerCase();
-
 async function loadPlayers() {
-  try { return JSON.parse(await fs.readFile(PLAYERS_PATH, 'utf8')); }
+  try { return JSON.parse(await fs.promises.readFile(PLAYERS_PATH, 'utf8')); }
   catch { return []; }
 }
 async function savePlayers(list) {
-  await fs.mkdir(path.dirname(PLAYERS_PATH), { recursive: true });
+  ensureDataDir();
   await writeJsonAtomic(PLAYERS_PATH, list);
 }
-function normName(s=''){ return s.trim().replace(/\s+/g,' '); }
+function normName(s) { return String(s || '').trim().replace(/\s+/g, ' '); }
+function emailLooksValid(s) { return !!String(s||'').match(/^[^@\s]+@[^@\s]+\.[^@\s]+$/); }
+function sameName(a,b){ return a.localeCompare(b, undefined, { sensitivity: 'accent' }) === 0; }
 
-function emailLooksOk(e='') {
-  if (!e) return true;
-  const ok = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
-  if (!ok) return false;
-  if (!EMAIL_DOMAIN) return true;
-  return e.toLowerCase().endsWith('@'+EMAIL_DOMAIN);
+// Demo/License cap (take the stricter)
+const DEMO_CAP = parseInt(process.env.DEMO_PLAYERS_MAX || '', 10);
+function effectivePlayerCap() {
+  const st = (license && license.getStatus && license.getStatus()) ? license.getStatus() : {};
+  const licCap = (st && st.license && Number.isFinite(st.license.max_players)) ? st.license.max_players : undefined;
+
+  if (Number.isFinite(DEMO_CAP) && Number.isFinite(licCap)) return Math.min(DEMO_CAP, licCap);
+  if (Number.isFinite(DEMO_CAP)) return DEMO_CAP;
+  if (Number.isFinite(licCap)) return licCap;
+  return Infinity;
 }
 
-/* ---------- POST /api/players/register ---------- */
-router.post('/register', express.json(), async (req,res) => {
-  try {
-    if (!ALLOW_SELF_SIGNUP) return res.status(403).json({ ok:false, error:'self_signup_disabled' });
+// ---------- GET /api/players/check-name?name=Foo ----------
+router.get('/check-name', async (req, res) => {
+  const name = normName(req.query.name || '');
+  if (!name) return res.status(400).json({ ok:false, error:'name_required' });
 
-    const s = license.getStatus();
-    if (!s.ok) return res.status(403).json({ ok:false, error:'license_invalid', reason:s.reason });
-
-    const { name, email='', pin, invite_code='' } = req.body || {};
-    const n = normName(String(name||''));
-    const p = String(pin||'');
-
-    if (INVITE_CODE_REQ && invite_code !== INVITE_CODE_REQ)
-      return res.status(401).json({ ok:false, error:'bad_invite_code' });
-
-    if (n.length < 2 || n.length > 60) return res.status(400).json({ ok:false, error:'name_length' });
-    if (!/^[\p{L}\p{N} .,'-]+$/u.test(n)) return res.status(400).json({ ok:false, error:'name_chars' });
-    if (p.length < 4) return res.status(400).json({ ok:false, error:'pin_too_short' });
-    if (!emailLooksOk(email)) return res.status(400).json({ ok:false, error:'email_invalid_or_domain' });
-
-    const players = await loadPlayers();
-
-    // Enforce max players from license (ignore the special "Admin" if present)
-    const activePlayers = players.filter(u => (u.name||'').toLowerCase() !== 'admin');
-    const max = Number((s.license && s.license.max_players) || 0);
-    if (max && activePlayers.length >= max)
-      return res.status(409).json({ ok:false, error:'max_players_reached', max });
-
-    // No duplicate names (case-insensitive)
-    const exists = players.some(u => (u.name||'').toLowerCase() === n.toLowerCase());
-    if (exists) return res.status(409).json({ ok:false, error:'name_taken' });
-
-    const id = 'p-' + uuidv4().slice(0,8);
-    const pin_hash = await bcrypt.hash(p, 10);
-
-    const record = { id, name: n, email: email || undefined, pin_hash, created_at: new Date().toISOString() };
-    players.push(record);
-    await savePlayers(players);
-
-    res.json({ ok:true, id, name:n });
-  } catch (e) {
-    res.status(500).json({ ok:false, error:'server_error', detail:e.message });
-  }
+  const players = await loadPlayers();
+  const exists = players.some(p => sameName(normName(p.name), name));
+  return res.json({ ok:true, available: !exists });
 });
 
-/* ---------- (Optional) GET /api/players/check-name?name=Vince ---------- */
-router.get('/check-name', async (req,res)=>{
-  const q = normName(String(req.query.name||''));
-  if (!q) return res.json({ ok:true, available:false });
+// ---------- POST /api/players/register ----------
+/*
+  body: { name, email?, pin, invite_code? }
+  Errors (strings aligned with your UI):
+    - self_signup_disabled (403)
+    - license_invalid (403)
+    - name_taken (409)
+    - pin_too_short (400)
+    - email_invalid_or_domain (400)
+    - bad_invite_code (403)
+    - max_players_reached (403)
+*/
+router.post('/register', express.json(), async (req, res) => {
+  const ALLOW_SELF_SIGNUP = String(process.env.ALLOW_SELF_SIGNUP || '').toLowerCase() === 'true';
+  if (!ALLOW_SELF_SIGNUP) return res.status(403).json({ ok:false, error:'self_signup_disabled' });
+
+  // License must be valid
+  const st = license.getStatus ? license.getStatus() : { ok:true };
+  if (!st.ok) return res.status(403).json({ ok:false, error:'license_invalid' });
+
+  const { name, email, pin, invite_code } = req.body || {};
+  const cleanedName = normName(name);
+
+  if (!cleanedName) return res.status(400).json({ ok:false, error:'name_required' });
+  if ((String(pin || '')).trim().length < 4) return res.status(400).json({ ok:false, error:'pin_too_short' });
+
+  // Optional invite code requirement
+  const REQUIRED_INVITE = (process.env.INVITE_CODE || '').trim();
+  if (REQUIRED_INVITE && String(invite_code || '').trim() !== REQUIRED_INVITE) {
+    return res.status(403).json({ ok:false, error:'bad_invite_code' });
+  }
+
+  // Optional email domain whitelist
+  const DOMAIN = (process.env.WHITELIST_EMAIL_DOMAIN || '').trim(); // e.g. "club.com"
+  if (email) {
+    if (!emailLooksValid(email)) return res.status(400).json({ ok:false, error:'email_invalid_or_domain' });
+    if (DOMAIN && !String(email).toLowerCase().endsWith('@' + DOMAIN.toLowerCase())) {
+      return res.status(400).json({ ok:false, error:'email_invalid_or_domain' });
+    }
+  }
+
   const players = await loadPlayers();
-  const taken = players.some(u => (u.name||'').toLowerCase() === q.toLowerCase());
-  res.json({ ok:true, available: !taken });
+
+  // Enforce max players (demo cap + license cap; uses stricter)
+  const activeCount = players.filter(p => !p.deleted).length;
+  const cap = effectivePlayerCap();
+  if (activeCount >= cap) {
+    return res.status(403).json({ ok:false, error:'max_players_reached' });
+  }
+
+  // Unique name (case-insensitive, accent-insensitive-ish)
+  const taken = players.some(p => sameName(normName(p.name), cleanedName));
+  if (taken) return res.status(409).json({ ok:false, error:'name_taken' });
+
+  // Create new player
+  const id = String(Date.now()) + '_' + Math.random().toString(36).slice(2,8);
+  const pin_hash = await bcrypt.hash(String(pin), 10);
+
+  const record = {
+    id,
+    name: cleanedName,
+    email: email ? String(email).trim() : undefined,
+    pin_hash,
+    created_at: new Date().toISOString()
+  };
+
+  players.push(record);
+  await savePlayers(players);
+
+  return res.json({ ok:true, id, name: cleanedName });
 });
 
 module.exports = router;

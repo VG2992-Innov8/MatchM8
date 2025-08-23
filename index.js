@@ -17,6 +17,11 @@ function cleanToken(s = '') {
 if (process.env.ADMIN_TOKEN) {
   process.env.ADMIN_TOKEN = cleanToken(process.env.ADMIN_TOKEN);
 }
+if (process.env.LICENSE_PUBKEY_B64) {
+  process.env.LICENSE_PUBKEY_B64 = cleanToken(process.env.LICENSE_PUBKEY_B64);
+}
+// demo guard: allow running without license in the demo copy
+const SKIP_LICENSE = String(process.env.DEMO_SKIP_LICENSE || '').toLowerCase() === 'true';
 
 // ------------- App bootstrap -------------
 const express = require('express');
@@ -66,26 +71,39 @@ function requireAdminToken(req, res, next) {
 
 // --- License wiring ---
 const license = require('./lib/license');
-license.loadAndValidate().then(s => console.log('License:', s.reason));
+// only log license status if we're not skipping in demo
+license.loadAndValidate().then(s => { if (!SKIP_LICENSE) console.log('License:', s.reason); });
 
 // Expose license status for UI
 app.get('/api/license/status', (_req, res) => res.json(license.getStatus()));
 
 // PUBLIC admin-auth endpoints (allowed even if license invalid)
-const ADMIN_PUBLIC = new Set(['/login', '/bootstrap', '/state']);
+const ADMIN_PUBLIC = new Set(['/login', '/bootstrap', '/state', '/health']); // added /health
+
+// helpful boot log so you can see the bypass is active
+if (SKIP_LICENSE) console.log('⚠️  DEMO_SKIP_LICENSE=true — bypassing license checks for /api/admin and /api/scores');
+
 app.use('/api/admin', (req, res, next) => {
+  // allow public admin endpoints through this gate
   if (ADMIN_PUBLIC.has(req.path)) return next();
+
+  // demo bypass: skip license check entirely
+  if (SKIP_LICENSE) return next();
+
+  // otherwise license must be valid
   const s = license.getStatus();
   if (!s.ok) return res.status(403).json({ error: 'License invalid: ' + s.reason });
   next();
 });
 
-// Require license for scores
-app.use('/api/scores', (_req, res, next) => {
+// Require license for scores (unless demo bypass)
+app.use('/api/scores', (req, res, next) => {
+  if (SKIP_LICENSE) return next();
   const s = license.getStatus();
   if (!s.ok) return res.status(403).json({ error: 'License invalid: ' + s.reason });
   next();
 });
+
 
 /* -------------------- Global middleware -------------------- */
 // CORS allowlist via env: CORS_ORIGIN="http://localhost:3000,https://your.site"
