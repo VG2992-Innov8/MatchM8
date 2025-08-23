@@ -12,6 +12,7 @@
 
   <main class="container wide">
     <h2 id="weekLabel" class="subhead"></h2>
+
     <div class="panel">
       <div class="center">
         <label for="week" class="visually-hidden">Week</label>
@@ -27,39 +28,53 @@
   </main>
 
   <script>
+  // ---------- setup ----------
   const qs = new URLSearchParams(location.search);
-  const weekInput = document.getElementById('week');
-  weekInput.value = Number(qs.get('week')) || 1;
+  const weekInput  = document.getElementById('week');
+  const weekLabel  = document.getElementById('weekLabel');
+  const toScoring  = document.getElementById('toScoring');
 
-  (async () => {
-  try {
-    const cfg = await fetch('/api/config').then(r => r.json());
-    const urlWeek = Number(new URL(location.href).searchParams.get('week'));
-    const currentWeek = Number.isFinite(urlWeek) ? urlWeek : (cfg.current_week || 1);
-    const totalWeeks = cfg.total_weeks || 38;
-
-    document.getElementById('weekLabel').textContent = `Week ${currentWeek} of ${totalWeeks}`;
-
-    // Store for other scripts if needed
-    window.CURRENT_WEEK = currentWeek;
-    window.TOTAL_WEEKS = totalWeeks;
-  } catch (e) {
-    console.warn("Could not fetch config.json", e);
-    document.getElementById('weekLabel').textContent = "Week ?";
-  }
-})();
-
+  let TOTAL_WEEKS = 38;  // fallback until /api/config returns
 
   function setScoringLink(){
-    document.getElementById('toScoring').href = `/Part_D_Scoring.html?week=${weekInput.value}`;
+    const w = Number(weekInput.value) || 1;
+    toScoring.href = `/Part_D_Scoring.html?week=${w}`;
   }
 
+  function updateWeekLabel(){
+    const w = Number(weekInput.value) || 1;
+    weekLabel.textContent = `Week ${w} of ${TOTAL_WEEKS}`;
+    setScoringLink();
+  }
+
+  async function initWeekAndTotals(){
+    // Prefer /api/config, fall back to URL ?week or 1
+    const urlWeek = Number(qs.get('week'));
+    try {
+      const res = await fetch('/api/config');
+      if (!res.ok) throw 0;
+      const cfg = await res.json();
+      TOTAL_WEEKS = cfg.total_weeks || 38;
+      weekInput.value = Number.isFinite(urlWeek) ? urlWeek : (cfg.current_week || 1);
+    } catch {
+      weekInput.value = Number.isFinite(urlWeek) ? urlWeek : 1;
+      TOTAL_WEEKS = TOTAL_WEEKS || 38;
+    }
+    updateWeekLabel();
+  }
+
+  // ---------- data / render ----------
   async function fetchFixtures(week){
     try{
       const res = await fetch(`/api/fixtures?week=${week}`);
-      if(!res.ok) throw 0;
-      return await res.json();
-    }catch{
+      if(!res.ok) throw new Error('bad status '+res.status);
+      const data = await res.json();
+      // accept either an array or {fixtures:[...]}
+      const list = Array.isArray(data) ? data : (Array.isArray(data.fixtures) ? data.fixtures : []);
+      if (!Array.isArray(list)) throw new Error('fixtures not array');
+      return list;
+    }catch(e){
+      console.warn('Using fallback fixtures (dev):', e.message);
       return [
         { id:'fixture_1', home:'Arsenal',  away:'Leeds' },
         { id:'fixture_2', home:'Chelsea',  away:'Liverpool' },
@@ -89,7 +104,7 @@
 
   async function load(){
     const week = Number(weekInput.value)||1;
-    setScoringLink();
+    updateWeekLabel(); // keep label in sync when loading
     const fixtures = await fetchFixtures(week);
     render(fixtures);
 
@@ -129,9 +144,13 @@
     b.style.display='block'; setTimeout(()=>b.style.display='none',1400);
   }
 
+  // ---------- events ----------
   document.getElementById('load').addEventListener('click', load);
   document.getElementById('save').addEventListener('click', save);
-  load();
+  weekInput.addEventListener('input', updateWeekLabel);
+
+  // ---------- boot ----------
+  initWeekAndTotals().then(load);
   </script>
 </body>
 </html>

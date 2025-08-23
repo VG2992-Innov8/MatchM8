@@ -55,10 +55,64 @@
     <div class="m8-header">
       <div class="m8-strip brand">${brandName}</div>
       <div class="m8-strip league">${leagueName}</div>
-      <div class="m8-strip page">${pageName}</div>
+      <div class="m8-strip page" id="m8-page-strip">${pageName}</div>
       <nav class="m8-nav" id="m8-nav">${links.map(linkHTML).join('')}<span id="m8-admin-slot"></span></nav>
     </div>
   `;
+
+  // ---------- Personalize Predictions label ----------
+  function isPredictionsPage() {
+    if (/^Predictions$/i.test(pageName)) return true;
+    try { return new URL('/Part_B_Predictions.html', location.origin).pathname === location.pathname; }
+    catch { return false; }
+  }
+
+  // Simple, safe cookie reader (no regex)
+  function getCookie(name) {
+    const all = document.cookie ? document.cookie.split('; ') : [];
+    for (const pair of all) {
+      const i = pair.indexOf('=');
+      const key = decodeURIComponent(i === -1 ? pair : pair.slice(0, i));
+      if (key === name) return decodeURIComponent(i === -1 ? '' : pair.slice(i + 1));
+    }
+    return null;
+  }
+
+  function possessive(name) {
+    if (!name) return null;
+    return /s$/i.test(name) ? `${name}'` : `${name}'s`;
+  }
+
+  async function getPlayerName() {
+    // 1) localStorage (common in PIN flows)
+    const keys = ['player_name','PLAYER_NAME','MM8_PLAYER_NAME'];
+    for (const k of keys) {
+      const v = localStorage.getItem(k);
+      if (v) return v;
+    }
+    // 2) cookies (if you set them on login)
+    const ck = getCookie('player_name') || getCookie('mm8_player_name');
+    if (ck) return ck;
+
+    // 3) optional server probe (safe if absent)
+    try {
+      const r = await fetch('/api/auth/whoami', { credentials: 'include' });
+      if (r.ok) {
+        const j = await r.json();
+        if (j && j.player && j.player.name) return j.player.name;
+      }
+    } catch {}
+    return null;
+  }
+
+  (async () => {
+    if (!isPredictionsPage()) return;
+    const el = document.getElementById('m8-page-strip');
+    if (!el) return;
+    const name = await getPlayerName();
+    if (name) el.textContent = `${possessive(name)} Predictions`;
+  })();
+  // ---------- /personalize ----------
 
   // Admin link appears ONLY after token is verified
   const adminSlot = document.getElementById('m8-admin-slot');

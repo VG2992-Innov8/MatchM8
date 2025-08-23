@@ -1,7 +1,9 @@
 // index.js — MatchM8 server (final)
 
-// ------------- Load & sanitize environment -------------
 const path = require('path');
+const fs = require('fs');
+
+// ------------- Load & sanitize environment -------------
 const envPath = path.join(__dirname, '.env');
 require('dotenv').config({ path: envPath, override: true });
 
@@ -24,6 +26,45 @@ const cookieParser = require('cookie-parser');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+const join = (...p) => path.join(__dirname, ...p);
+const DATA_DIR = join('data');
+const CONFIG_PATH = join('data', 'config.json');
+
+// --- config defaults used if data/config.json is missing ---
+const DEFAULT_CONFIG = {
+  season: 2025,
+  total_weeks: 38,
+  current_week: 1,
+  lock_minutes_before_kickoff: 10,
+  deadline_mode: 'first_kickoff',
+  timezone: 'Australia/Melbourne',
+};
+
+// helpers to read/write config.json safely
+function readConfig() {
+  try {
+    const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
+    const obj = JSON.parse(raw);
+    return { ...DEFAULT_CONFIG, ...obj };
+  } catch {
+    return { ...DEFAULT_CONFIG };
+  }
+}
+function writeConfig(cfg) {
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
+}
+
+// simple admin-token guard for non-/api/admin routes
+function requireAdminToken(req, res, next) {
+  const t = cleanToken(req.headers['x-admin-token'] || '');
+  if (!t || t !== (process.env.ADMIN_TOKEN || '')) {
+    return res.status(401).json({ ok: false, error: 'invalid admin token' });
+  }
+  next();
+}
+
+// --- License wiring (as you had it) ---
 const license = require('./lib/license');
 license.loadAndValidate().then(s => console.log('License:', s.reason));
 
@@ -66,7 +107,6 @@ app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false }));
 
 // Static assets
-const join = (...p) => path.join(__dirname, ...p);
 app.use('/data', express.static(join('data'))); // expose JSON for preview (disable for prod if you like)
 app.use(express.static(join('public')));
 app.use('/ui', express.static(join('ui')));
@@ -78,6 +118,44 @@ app.use((req, res, next) => {
     return res.redirect(fixed);
   }
   next();
+});
+
+/* -------------------- /api/config (NEW) -------------------- */
+// Public GET: players & UI read season info
+app.get('/api/config', (_req, res) => {
+  res.json(readConfig());
+});
+
+// Admin POST: save season settings etc.
+app.post('/api/config', requireAdminToken, (req, res) => {
+  const prev = readConfig();
+  const next = {
+    ...prev,
+    ...req.body,
+  };
+
+  // coercions/sanity
+  if ('total_weeks' in req.body) {
+    next.total_weeks = Math.max(1, parseInt(req.body.total_weeks, 10) || prev.total_weeks);
+  }
+  if ('current_week' in req.body) {
+    next.current_week = Math.max(1, parseInt(req.body.current_week, 10) || prev.current_week);
+  }
+  if ('lock_minutes_before_kickoff' in req.body) {
+    next.lock_minutes_before_kickoff = Math.max(0, parseInt(req.body.lock_minutes_before_kickoff, 10) || 0);
+  }
+  if ('season' in req.body) {
+    next.season = parseInt(req.body.season, 10) || prev.season;
+  }
+  if ('deadline_mode' in req.body) {
+    next.deadline_mode = (req.body.deadline_mode === 'per_match') ? 'per_match' : 'first_kickoff';
+  }
+  if ('timezone' in req.body) {
+    next.timezone = String(req.body.timezone || prev.timezone);
+  }
+
+  writeConfig(next);
+  res.json({ ok: true, config: next });
 });
 
 /* -------------------- Safe require + mount -------------------- */
@@ -96,11 +174,30 @@ function mount(label, route, mod) {
 }
 const mounted = [];
 
-// Fixtures
+// Fixtures (try user route first)
 const fixtures = safeRequire('./routes/fixtures.js', './routes/fixtures');
 if (fixtures.ok) {
   mount('./routes/fixtures.js', '/api/fixtures', fixtures.mod);
   mount('./routes/fixtures.js', '/fixtures', fixtures.mod);
+} else {
+  // Fallback public fixtures: returns plain array for week
+  app.get('/api/fixtures', (req, res) => {
+    const cfg = readConfig();
+    const week = Math.max(1, parseInt(req.query.week, 10) || 1);
+    const season = cfg.season || 2025;
+    const fpath = join('data', 'fixtures', `season-${season}`, `week-${week}.json`);
+    try {
+      const txt = fs.readFileSync(fpath, 'utf8');
+      const arr = JSON.parse(txt);
+      if (Array.isArray(arr)) return res.json(arr);
+      // If file contains {fixtures:[...]} normalize to array
+      if (arr && Array.isArray(arr.fixtures)) return res.json(arr.fixtures);
+      return res.json([]);
+    } catch {
+      return res.json([]); // 200 with empty array keeps client happy
+    }
+  });
+  mounted.push({ label: '(inline)/api/fixtures', route: '/api/fixtures' });
 }
 
 // Predictions
@@ -124,14 +221,14 @@ if (auth.ok) {
   mount('./routes/auth.js', '/auth', auth.mod);
 }
 
-// Players (new; optional)
+// Players (optional)
 const players = safeRequire('./routes/players.js', './routes/players');
 if (players.ok) {
   mount('./routes/players.js', '/api/players', players.mod);
   mount('./routes/players.js', '/players', players.mod);
 }
 
-// Admin (guarded via header)
+// Admin (guarded via license middleware above; token checks inside route impl)
 const admin = safeRequire('./routes/admin.js', './routes/admin');
 if (admin.ok) {
   mount('./routes/admin.js', '/api/admin', admin.mod);
