@@ -7,3 +7,11 @@ data/*
 *.zip
 .tmp/
 .vscode/
+data/admin.json
+data/players.json
+data/license.json
+data/license.sig
+data/fixtures/
+data/results/
+data/predictions/
+data/scores/weeks/

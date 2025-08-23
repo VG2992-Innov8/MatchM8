@@ -8,13 +8,12 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <!-- 3-line header (brand • league • page) is injected by hero.js -->
   <div id="hero" data-page="Home"></div>
-  <script src="/config.js"></script> <!-- optional; sets MATCHM8_BRAND / MATCHM8_LEAGUE -->
+  <script src="/config.js"></script>
   <script src="/hero.js" defer></script>
 
   <main class="container">
-    <!-- License Status (read-only) -->
+    <!-- License Status -->
     <div id="licenseBanner" class="panel" style="display:none">
       <div id="licStatus" style="font-weight:700"></div>
       <div id="licDetail" style="color:var(--muted)"></div>
@@ -23,22 +22,22 @@
     <!-- Login Panel -->
     <div class="panel">
       <h2 style="margin-top:0">Sign in</h2>
-      <div class="center" style="gap:8px; flex-wrap:wrap; align-items:center;">
+      <form id="loginForm" class="center" style="gap:8px; flex-wrap:wrap; align-items:center;">
         <label> Name<br>
-          <input id="loginName" class="input" placeholder="Your name (e.g. Vince)" style="min-width:240px">
+          <input id="loginName" class="input" placeholder="Your name (e.g. Vince)" style="min-width:240px" autocomplete="username">
         </label>
-        <label> PIN<br>
-          <input id="loginPin" class="input" type="password" placeholder="4+ digits" style="min-width:160px">
+        <label> PIN / Admin Password<br>
+          <input id="loginPin" class="input" type="password" placeholder="4+ digits (players) · 6+ chars (Admin)" style="min-width:220px" autocomplete="current-password" inputmode="numeric">
         </label>
-        <button id="btnLogin" class="btn primary" style="align-self:flex-end">Sign in</button>
+        <button id="btnLogin" class="btn primary" style="align-self:flex-end" type="submit">Sign in</button>
         <span id="loginMsg" style="margin-left:8px"></span>
-      </div>
+      </form>
       <div style="margin-top:8px; color:var(--muted);">
         Forgot your PIN? Ask your league admin to reset it on the Admin page.
       </div>
     </div>
 
-    <!-- Self‑registration Panel -->
+    <!-- Self-registration Panel -->
     <div class="panel" id="signupPanel">
       <h2 style="margin-top:0">New here? Create an account</h2>
       <div class="center" style="gap:8px; flex-wrap:wrap; align-items:center;">
@@ -46,10 +45,10 @@
           <input id="suName" class="input" placeholder="e.g. Alex Smith" style="min-width:240px">
         </label>
         <label> Email (optional)<br>
-          <input id="suEmail" class="input" placeholder="name@example.com" style="min-width:260px">
+          <input id="suEmail" class="input" placeholder="name@example.com" style="min-width:260px" autocomplete="email">
         </label>
         <label> Choose a PIN<br>
-          <input id="suPin" class="input" type="password" placeholder="4+ digits" style="min-width:200px">
+          <input id="suPin" class="input" type="password" placeholder="4+ digits" style="min-width:200px" inputmode="numeric">
         </label>
         <label> Invite code (if required)<br>
           <input id="suInvite" class="input" placeholder="Invite code" style="min-width:180px">
@@ -72,53 +71,106 @@
       if(!r.ok) return;
       const s = await r.json();
       const box = $('#licenseBanner');
-      const a = $('#licStatus');
-      const b = $('#licDetail');
       box.style.display = 'block';
       if(s.ok){
         const lic = s.license||{};
-        a.textContent = `License OK — ${lic.edition||''} • Players: ${lic.max_players||0}`;
-        b.textContent = `Expires: ${lic.expires_utc? new Date(lic.expires_utc).toLocaleDateString(): '—'}`;
+        $('#licStatus').textContent = `License OK — ${lic.edition||''} • Players: ${lic.max_players||0}`;
+        $('#licDetail').textContent = `Expires: ${lic.expires_utc? new Date(lic.expires_utc).toLocaleDateString(): '—'}`;
       } else {
-        a.textContent = 'License INVALID';
-        b.textContent = s.reason || '';
+        $('#licStatus').textContent = 'License INVALID';
+        $('#licDetail').textContent = s.reason || '';
       }
     }catch{}
   })();
 
-  // Login
-  async function doLogin(){
+  // -------- Admin auth helpers --------
+  async function adminState(){ const r = await fetch('/api/admin/state'); return r.ok ? r.json() : { bootstrap_required:false }; }
+  async function adminBootstrap(new_password){
+    const r = await fetch('/api/admin/bootstrap', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ new_password })
+    });
+    if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error || 'bootstrap_failed');
+  }
+  async function adminLogin(password){
+    const r = await fetch('/api/admin/login', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ password })
+    });
+    const j = await r.json().catch(()=>({}));
+    if(r.status === 409 && j.error === 'bootstrap_required') return { bootstrap:true };
+    if(!r.ok || !j.ok) throw new Error(j.error || 'admin_login_failed');
+    localStorage.setItem('admin_token', j.token);
+    return { ok:true };
+  }
+
+  // -------- Login (Admin or Player) --------
+  async function doLogin(e){
+    e?.preventDefault();
     const name = $('#loginName').value.trim();
     const pin  = $('#loginPin').value.trim();
     const msgEl = $('#loginMsg'); setMsg(msgEl, '');
-    if(!name || pin.length < 4){ return setMsg(msgEl, 'Enter your name and a 4+ digit PIN.', false); }
+    const btn = $('#btnLogin'); btn.disabled = true;
+
+    // Admin path (Admin is NOT a player)
+    if (/^admin$/i.test(name)) {
+      try {
+        const st = await adminState();
+        if (st.bootstrap_required) {
+          if (pin.length < 6) {
+            setMsg(msgEl, 'Set an Admin password (≥ 6 chars) and click Sign in again.', false);
+            btn.disabled = false; return;
+          }
+          await adminBootstrap(pin);
+        }
+        const ok = await adminLogin(pin);
+        if (ok) { location.href = '/ui/admin.html'; return; }
+      } catch (e) {
+        const map = {
+          bad_password: 'Wrong Admin password.',
+          admin_token_missing: 'Server missing ADMIN_TOKEN in .env.',
+          bootstrap_failed: 'Could not set Admin password.',
+        };
+        setMsg(msgEl, map[e.message] || 'Admin sign-in failed.', false);
+      } finally {
+        btn.disabled = false;
+      }
+      return;
+    }
+
+    // Player path
+    if(!name || pin.length < 4){
+      setMsg(msgEl, 'Enter your name and a 4+ digit PIN.', false);
+      btn.disabled = false; return;
+    }
     try{
       const r = await fetch('/api/auth/pin/verify', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ name, pin })
       });
-      const j = await r.json();
-      if(!r.ok || !j.ok) throw new Error(j.error || 'invalid');
+      const ct = r.headers.get('content-type')||'';
+      const j = ct.includes('application/json') ? await r.json() : {};
+      if(!r.ok || j.ok === false) throw new Error(j.error || ('HTTP '+r.status));
 
-      // Stash minimal identity for UX (not security)
-      try{ localStorage.setItem('player_name', j.name); localStorage.setItem('player_id', j.id); }catch{}
-
-      // Admin shortcut: if name is "Admin", go to Admin UI. Everyone else → predictions
-      if(/^admin$/i.test(name)) { location.href = '/ui/admin.html'; }
-      else { location.href = '/Part_B_Predictions.html'; }
+      try{ localStorage.setItem('player_name', j.name || name); localStorage.setItem('player_id', j.id); }catch{}
+      location.href = '/Part_B_Predictions.html';
     }catch(e){
       const map = {
         'player not found': 'No such player. Check spelling or create an account.',
         'no PIN set': 'No PIN set yet. Ask your admin to set or reset your PIN.',
         'invalid PIN': 'That PIN didn\'t match. Try again.',
+        'HTTP 404': 'Sign-in endpoint not found (server routes not mounted).',
       };
       setMsg(msgEl, map[e.message] || 'Sign in failed.', false);
+    } finally {
+      btn.disabled = false;
     }
   }
-  $('#btnLogin').addEventListener('click', doLogin);
-  $('#loginPin').addEventListener('keydown', e=>{ if(e.key==='Enter') doLogin(); });
 
-  // Signup
+  $('#loginForm').addEventListener('submit', doLogin);
+  $('#btnLogin').addEventListener('click', doLogin);
+
+  // -------- Signup (unchanged) --------
   async function selfSignup(){
     const name   = $('#suName').value.trim();
     const email  = $('#suEmail').value.trim();
@@ -136,7 +188,6 @@
       const j = await r.json();
       if(!r.ok || !j.ok) throw new Error(j.error || 'sign_up_failed');
 
-      // Auto-login after creating
       const v = await fetch('/api/auth/pin/verify', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ name, pin })

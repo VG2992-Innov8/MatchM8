@@ -9,9 +9,9 @@ require('dotenv').config({ path: envPath, override: true });
 
 function cleanToken(s = '') {
   return String(s)
-    .replace(/\r/g, '')                 // strip Windows CR
-    .replace(/\s+#.*$/, '')             // strip inline " # comment"
-    .replace(/^\s*['"]|['"]\s*$/g, '')  // strip surrounding quotes
+    .replace(/\r/g, '')
+    .replace(/\s+#.*$/, '')
+    .replace(/^\s*['"]|['"]\s*$/g, '')
     .trim();
 }
 if (process.env.ADMIN_TOKEN) {
@@ -64,20 +64,24 @@ function requireAdminToken(req, res, next) {
   next();
 }
 
-// --- License wiring (as you had it) ---
+// --- License wiring ---
 const license = require('./lib/license');
 license.loadAndValidate().then(s => console.log('License:', s.reason));
 
-// Expose license status for UI (optional)
-app.get('/api/license/status', (req, res) => res.json(license.getStatus()) );
+// Expose license status for UI
+app.get('/api/license/status', (_req, res) => res.json(license.getStatus()));
 
-// Require license for admin & scores
+// PUBLIC admin-auth endpoints (allowed even if license invalid)
+const ADMIN_PUBLIC = new Set(['/login', '/bootstrap', '/state']);
 app.use('/api/admin', (req, res, next) => {
+  if (ADMIN_PUBLIC.has(req.path)) return next();
   const s = license.getStatus();
   if (!s.ok) return res.status(403).json({ error: 'License invalid: ' + s.reason });
   next();
 });
-app.use('/api/scores', (req, res, next) => {
+
+// Require license for scores
+app.use('/api/scores', (_req, res, next) => {
   const s = license.getStatus();
   if (!s.ok) return res.status(403).json({ error: 'License invalid: ' + s.reason });
   next();
@@ -86,16 +90,11 @@ app.use('/api/scores', (req, res, next) => {
 /* -------------------- Global middleware -------------------- */
 // CORS allowlist via env: CORS_ORIGIN="http://localhost:3000,https://your.site"
 const ALLOW = (process.env.CORS_ORIGIN || '')
-  .split(',')
-  .map(s => s.trim())
-  .filter(Boolean);
+  .split(',').map(s => s.trim()).filter(Boolean);
 
 if (ALLOW.length) {
   app.use(cors({
-    origin: (origin, cb) => {
-      if (!origin || ALLOW.includes(origin)) return cb(null, origin);
-      return cb(new Error('Not allowed by CORS'));
-    },
+    origin: (origin, cb) => (!origin || ALLOW.includes(origin)) ? cb(null, origin) : cb(new Error('Not allowed by CORS')),
     credentials: false
   }));
 } else {
@@ -107,7 +106,7 @@ app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false }));
 
 // Static assets
-app.use('/data', express.static(join('data'))); // expose JSON for preview (disable for prod if you like)
+app.use('/data', express.static(join('data'))); // (disable in prod if you prefer)
 app.use(express.static(join('public')));
 app.use('/ui', express.static(join('ui')));
 
@@ -120,39 +119,22 @@ app.use((req, res, next) => {
   next();
 });
 
-/* -------------------- /api/config (NEW) -------------------- */
+/* -------------------- /api/config -------------------- */
 // Public GET: players & UI read season info
-app.get('/api/config', (_req, res) => {
-  res.json(readConfig());
-});
+app.get('/api/config', (_req, res) => res.json(readConfig()));
 
 // Admin POST: save season settings etc.
 app.post('/api/config', requireAdminToken, (req, res) => {
   const prev = readConfig();
-  const next = {
-    ...prev,
-    ...req.body,
-  };
+  const next = { ...prev, ...req.body };
 
   // coercions/sanity
-  if ('total_weeks' in req.body) {
-    next.total_weeks = Math.max(1, parseInt(req.body.total_weeks, 10) || prev.total_weeks);
-  }
-  if ('current_week' in req.body) {
-    next.current_week = Math.max(1, parseInt(req.body.current_week, 10) || prev.current_week);
-  }
-  if ('lock_minutes_before_kickoff' in req.body) {
-    next.lock_minutes_before_kickoff = Math.max(0, parseInt(req.body.lock_minutes_before_kickoff, 10) || 0);
-  }
-  if ('season' in req.body) {
-    next.season = parseInt(req.body.season, 10) || prev.season;
-  }
-  if ('deadline_mode' in req.body) {
-    next.deadline_mode = (req.body.deadline_mode === 'per_match') ? 'per_match' : 'first_kickoff';
-  }
-  if ('timezone' in req.body) {
-    next.timezone = String(req.body.timezone || prev.timezone);
-  }
+  if ('total_weeks' in req.body) next.total_weeks = Math.max(1, parseInt(req.body.total_weeks, 10) || prev.total_weeks);
+  if ('current_week' in req.body) next.current_week = Math.max(1, parseInt(req.body.current_week, 10) || prev.current_week);
+  if ('lock_minutes_before_kickoff' in req.body) next.lock_minutes_before_kickoff = Math.max(0, parseInt(req.body.lock_minutes_before_kickoff, 10) || 0);
+  if ('season' in req.body) next.season = parseInt(req.body.season, 10) || prev.season;
+  if ('deadline_mode' in req.body) next.deadline_mode = (req.body.deadline_mode === 'per_match') ? 'per_match' : 'first_kickoff';
+  if ('timezone' in req.body) next.timezone = String(req.body.timezone || prev.timezone);
 
   writeConfig(next);
   res.json({ ok: true, config: next });
@@ -160,13 +142,8 @@ app.post('/api/config', requireAdminToken, (req, res) => {
 
 /* -------------------- Safe require + mount -------------------- */
 function safeRequire(label, p) {
-  try {
-    // eslint-disable-next-line import/no-dynamic-require, global-require
-    return { ok: true, mod: require(p) };
-  } catch (e) {
-    console.warn(`⚠️  Skipping ${label}:`, e.message);
-    return { ok: false, mod: null };
-  }
+  try { return { ok: true, mod: require(p) }; }
+  catch (e) { console.warn(`⚠️  Skipping ${label}:`, e.message); return { ok: false, mod: null }; }
 }
 function mount(label, route, mod) {
   app.use(route, mod);
@@ -190,11 +167,10 @@ if (fixtures.ok) {
       const txt = fs.readFileSync(fpath, 'utf8');
       const arr = JSON.parse(txt);
       if (Array.isArray(arr)) return res.json(arr);
-      // If file contains {fixtures:[...]} normalize to array
       if (arr && Array.isArray(arr.fixtures)) return res.json(arr.fixtures);
       return res.json([]);
     } catch {
-      return res.json([]); // 200 with empty array keeps client happy
+      return res.json([]);
     }
   });
   mounted.push({ label: '(inline)/api/fixtures', route: '/api/fixtures' });
@@ -228,7 +204,12 @@ if (players.ok) {
   mount('./routes/players.js', '/players', players.mod);
 }
 
-// Admin (guarded via license middleware above; token checks inside route impl)
+// ---- Admin auth (mounted BEFORE other /api/admin routes; allowed by ADMIN_PUBLIC whitelist) ----
+const adminAuth = require('./routes/admin_auth');
+app.use('/api/admin', adminAuth);
+mounted.push({ label: './routes/admin_auth.js', route: '/api/admin' });
+
+// ---- Admin routes (guarded; token checks inside route impl) ----
 const admin = safeRequire('./routes/admin.js', './routes/admin');
 if (admin.ok) {
   mount('./routes/admin.js', '/api/admin', admin.mod);
