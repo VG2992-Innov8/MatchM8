@@ -1,10 +1,10 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Predictions</title>
-    <link rel="stylesheet" href="/styles.css">
+  <title>Predictions</title>
     <script src="/predictions.js" defer></script>
+  <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
     <div class="container">
@@ -18,15 +18,17 @@
         <div id="pinPrompt" style="display: none;">
             <label for="playerPin">Enter PIN:</label>
             <input type="password" id="playerPin" maxlength="6">
-            <button id="verifyPin">Verify PIN</button>
+            <button class="btn" id="verifyPin">Verify PIN</button>
         </div>
 
         <div id="predictionsForm" style="display: none;">
             <div id="matchesContainer"></div>
-            <button id="savePredictions">Save Predictions</button>
+            <button class="btn" id="savePredictions">Save Predictions</button>
         </div>
 
         <p id="statusMessage"></p>
     </div>
 </body>
 </html>
+
+

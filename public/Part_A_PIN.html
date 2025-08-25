@@ -1,96 +1,214 @@
-<!DOCTYPE html> 
+﻿<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>MatchM8 – Enter PIN</title>
-  <style>
-    body {
-      margin: 0;
-      font-family: Arial, sans-serif;
-      background-color: #a8ddf0;
-      text-align: center;
-    }
-
-    header {
-      background-color: #40b4e5;
-      border-bottom: 2px solid black;
-    }
-
-    h1, h2, h3 {
-      margin: 0;
-      padding: 15px;
-      border: 2px solid black;
-      background-color: #3cb0ea;
-      width: 100%;
-      box-sizing: border-box;
-    }
-
-    h1 {
-      font-size: 2em;
-      font-weight: bold;
-    }
-
-    h2 {
-      font-size: 1.5em;
-    }
-
-    h3 {
-      font-size: 1.2em;
-      font-weight: bold;
-    }
-
-    form {
-      margin-top: 2em;
-      background: white;
-      display: inline-block;
-      padding: 2em;
-      border-radius: 10px;
-      border: 2px solid #004080;
-    }
-
-    label, input {
-      display: block;
-      margin: 1em auto;
-      font-size: 1em;
-      width: 200px;
-    }
-
-    input {
-      padding: 0.5em;
-    }
-
-    button {
-      background-color: #0080ff;
-      color: white;
-      padding: 0.7em 1.5em;
-      border: none;
-      cursor: pointer;
-      font-size: 1em;
-      margin-top: 1em;
-    }
-
-    button:hover {
-      background-color: #005bb5;
-    }
-  </style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Home — MatchM8 Soccer</title>
+  <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
+  <div id="hero" data-page="Home"></div>
+  <script src="/config.js"></script>
+  <script src="/hero.js" defer></script>
 
-  <header>
-    <h1>MatchM8 Soccer Predictions</h1>
-    <h2>English Premier League</h2>
-    <h3>Enter PIN</h3>
-  </header>
+  <main class="container">
+    <!-- License Status -->
+    <div id="licenseBanner" class="panel" style="display:none">
+      <div id="licStatus" style="font-weight:700"></div>
+      <div id="licDetail" style="color:var(--muted)"></div>
+    </div>
 
-  <form action="/Part_B_Predictions.html" method="GET">
-    <label for="nameOrEmail">Name or Email:</label>
-    <input type="text" id="nameOrEmail" name="nameOrEmail" required />
+    <!-- Login Panel -->
+    <div class="panel">
+      <h2 style="margin-top:0">Sign in</h2>
+      <form id="loginForm" class="center" style="gap:8px; flex-wrap:wrap; align-items:center;">
+        <label> Name<br>
+          <input id="loginName" class="input" placeholder="Your name (e.g. Vince)" style="min-width:240px" autocomplete="username">
+        </label>
+        <label> PIN / Admin Password<br>
+          <input id="loginPin" class="input" type="password" placeholder="4+ digits (players) · 6+ chars (Admin)" style="min-width:220px" autocomplete="current-password" inputmode="numeric">
+        </label>
+        <button id="btnLogin" class="btn primary" style="align-self:flex-end" type="submit">Sign in</button>
+        <span id="loginMsg" style="margin-left:8px"></span>
+      </form>
+      <div style="margin-top:8px; color:var(--muted);">
+        Forgot your PIN? Ask your league admin to reset it on the Admin page.
+      </div>
+    </div>
 
-    <label for="pin">PIN:</label>
-    <input type="password" id="pin" name="pin" required />
+    <!-- Self-registration Panel -->
+    <div class="panel" id="signupPanel">
+      <h2 style="margin-top:0">New here? Create an account</h2>
+      <div class="center" style="gap:8px; flex-wrap:wrap; align-items:center;">
+        <label> Full name<br>
+          <input id="suName" class="input" placeholder="e.g. Alex Smith" style="min-width:240px">
+        </label>
+        <label> Email (optional)<br>
+          <input id="suEmail" class="input" placeholder="name@example.com" style="min-width:260px" autocomplete="email">
+        </label>
+        <label> Choose a PIN<br>
+          <input id="suPin" class="input" type="password" placeholder="4+ digits" style="min-width:200px" inputmode="numeric">
+        </label>
+        <label> Invite code (if required)<br>
+          <input id="suInvite" class="input" placeholder="Invite code" style="min-width:180px">
+        </label>
+        <button id="btnSignup" class="btn" style="align-self:flex-end">Create account</button>
+        <span id="suMsg" style="margin-left:8px"></span>
+      </div>
+    </div>
+  </main>
 
-    <button type="submit">Enter</button>
-  </form>
+  <script>
+  // Helpers
+  const $ = (s) => document.querySelector(s);
+  function setMsg(el, text, ok){ el.textContent = text || ''; el.style.color = ok ? 'green' : 'crimson'; }
 
+  // License banner
+  (async function initLicense(){
+    try{
+      const r = await fetch('/api/license/status', { cache:'no-store' });
+      if(!r.ok) return;
+      const s = await r.json();
+      const box = $('#licenseBanner');
+      box.style.display = 'block';
+      if(s.ok){
+        const lic = s.license||{};
+        $('#licStatus').textContent = `License OK — ${lic.edition||''} • Players: ${lic.max_players||0}`;
+        $('#licDetail').textContent = `Expires: ${lic.expires_utc? new Date(lic.expires_utc).toLocaleDateString(): '—'}`;
+      } else {
+        $('#licStatus').textContent = 'License INVALID';
+        $('#licDetail').textContent = s.reason || '';
+      }
+    }catch{}
+  })();
+
+  // -------- Admin auth helpers --------
+  async function adminState(){ const r = await fetch('/api/admin/state'); return r.ok ? r.json() : { bootstrap_required:false }; }
+  async function adminBootstrap(new_password){
+    const r = await fetch('/api/admin/bootstrap', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ new_password })
+    });
+    if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error || 'bootstrap_failed');
+  }
+  async function adminLogin(password){
+    const r = await fetch('/api/admin/login', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ password })
+    });
+    const j = await r.json().catch(()=>({}));
+    if(r.status === 409 && j.error === 'bootstrap_required') return { bootstrap:true };
+    if(!r.ok || !j.ok) throw new Error(j.error || 'admin_login_failed');
+    localStorage.setItem('admin_token', j.token);
+    return { ok:true };
+  }
+
+  // -------- Login (Admin or Player) --------
+  async function doLogin(e){
+    e?.preventDefault();
+    const name = $('#loginName').value.trim();
+    const pin  = $('#loginPin').value.trim();
+    const msgEl = $('#loginMsg'); setMsg(msgEl, '');
+    const btn = $('#btnLogin'); btn.disabled = true;
+
+    // Admin path (Admin is NOT a player)
+    if (/^admin$/i.test(name)) {
+      try {
+        const st = await adminState();
+        if (st.bootstrap_required) {
+          if (pin.length < 6) {
+            setMsg(msgEl, 'Set an Admin password (≥ 6 chars) and click Sign in again.', false);
+            btn.disabled = false; return;
+          }
+          await adminBootstrap(pin);
+        }
+        const ok = await adminLogin(pin);
+        if (ok) { location.href = '/ui/admin.html'; return; }
+      } catch (e) {
+        const map = {
+          bad_password: 'Wrong Admin password.',
+          admin_token_missing: 'Server missing ADMIN_TOKEN in .env.',
+          bootstrap_failed: 'Could not set Admin password.',
+        };
+        setMsg(msgEl, map[e.message] || 'Admin sign-in failed.', false);
+      } finally {
+        btn.disabled = false;
+      }
+      return;
+    }
+
+    // Player path
+    if(!name || pin.length < 4){
+      setMsg(msgEl, 'Enter your name and a 4+ digit PIN.', false);
+      btn.disabled = false; return;
+    }
+    try{
+      const r = await fetch('/api/auth/pin/verify', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ name, pin })
+      });
+      const ct = r.headers.get('content-type')||'';
+      const j = ct.includes('application/json') ? await r.json() : {};
+      if(!r.ok || j.ok === false) throw new Error(j.error || ('HTTP '+r.status));
+
+      try{ localStorage.setItem('player_name', j.name || name); localStorage.setItem('player_id', j.id); }catch{}
+      location.href = '/Part_B_Predictions.html';
+    }catch(e){
+      const map = {
+        'player not found': 'No such player. Check spelling or create an account.',
+        'no PIN set': 'No PIN set yet. Ask your admin to set or reset your PIN.',
+        'invalid PIN': 'That PIN didn\'t match. Try again.',
+        'HTTP 404': 'Sign-in endpoint not found (server routes not mounted).',
+      };
+      setMsg(msgEl, map[e.message] || 'Sign in failed.', false);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  $('#loginForm').addEventListener('submit', doLogin);
+  $('#btnLogin').addEventListener('click', doLogin);
+
+  // -------- Signup (unchanged) --------
+  async function selfSignup(){
+    const name   = $('#suName').value.trim();
+    const email  = $('#suEmail').value.trim();
+    const pin    = $('#suPin').value.trim();
+    const invite = $('#suInvite').value.trim();
+    const msgEl  = $('#suMsg'); setMsg(msgEl, '');
+
+    if(!name || pin.length<4) return setMsg(msgEl, 'Enter a name and a 4+ digit PIN.', false);
+
+    try{
+      const r = await fetch('/api/players/register', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ name, email, pin, invite_code: invite })
+      });
+      const j = await r.json();
+      if(!r.ok || !j.ok) throw new Error(j.error || 'sign_up_failed');
+
+      const v = await fetch('/api/auth/pin/verify', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ name, pin })
+      });
+      if(v.ok){ setMsg(msgEl, 'Account created! Redirecting…', true); setTimeout(()=> location.href='/Part_B_Predictions.html', 400); }
+      else { setMsg(msgEl, 'Account created. Please sign in above.', true); }
+    }catch(e){
+      const map = {
+        name_taken: 'That name is already taken.',
+        pin_too_short: 'PIN must be at least 4 digits.',
+        email_invalid_or_domain: 'Email looks invalid or not allowed.',
+        max_players_reached: 'Player limit reached for this license.',
+        bad_invite_code: 'Invite code is incorrect.',
+        self_signup_disabled: 'Self-registration is currently disabled.',
+        license_invalid: 'License not valid yet. Contact the organizer.'
+      };
+      setMsg(msgEl, map[e.message] || 'Could not create account.', false);
+    }
+  }
+  $('#btnSignup').addEventListener('click', selfSignup);
+  $('#suPin').addEventListener('keydown', e=>{ if(e.key==='Enter') selfSignup(); });
+  </script>
 </body>
 </html>

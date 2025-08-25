@@ -68,7 +68,7 @@
     if (!ft || ft.home == null || ft.away == null) return "";
     const span = document.createElement("span");
     span.className = "ft-badge";
-    span.textContent = `FT ${ft.home}–${ft.away}`;
+    span.textContent = `FT ${ft.home}Ã¢â‚¬"${ft.away}`;
     return span;
   }
   function inputScore(value = "") {
@@ -154,7 +154,7 @@
     });
   }
 
-  // ---------- save (with “Saved X/Y” + warnings for blanks) ----------
+  // ---------- save (with Ã¢â‚¬Å"Saved X/YÃ¢â‚¬Â + warnings for blanks) ----------
   async function save() {
     const rows = Array.from(fixturesEl.querySelectorAll(".row")).slice(1);
     const payload = {};
@@ -176,7 +176,7 @@
         const labels = r.querySelectorAll("div");
         const homeName = labels[0]?.textContent?.trim() || "Home";
         const awayName = labels[1]?.textContent?.trim() || "Away";
-        missing.push(`${homeName}–${awayName}`);
+        missing.push(`${homeName}Ã¢â‚¬"${awayName}`);
       }
     }
 
@@ -196,7 +196,7 @@
 
     if (savedCount === total) {
       if (saveStatus) { saveStatus.classList.remove("hidden"); setTimeout(() => saveStatus.classList.add("hidden"), 1500); }
-      else { msg("Saved ✔"); setTimeout(() => msg(""), 1200); }
+      else { msg("Saved Ã¢Å"""); setTimeout(() => msg(""), 1200); }
     } else {
       msg(`Saved ${savedCount}/${total}. Not saved: ${missing.join(", ")}.`);
       setTimeout(() => msg(""), 2500);

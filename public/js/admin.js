@@ -35,10 +35,10 @@ document.addEventListener("DOMContentLoaded", () => {
         throw new Error(data.error || "Failed to save results.");
       }
 
-      alert("✅ Results saved successfully!");
+      alert("Ã¢Å"â€¦ Results saved successfully!");
     } catch (err) {
-      console.error("❌ Error saving results:", err);
-      alert("❌ Failed to save results.");
+      console.error("Ã¢ÂÅ' Error saving results:", err);
+      alert("Ã¢ÂÅ' Failed to save results.");
     }
   });
 });

@@ -1,39 +1,145 @@
-<!doctype html>
-<html>
+﻿<!doctype html>
+<html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>MatchM8 — Season Leaderboard</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; padding: 20px; }
-    h1 { margin-top: 0; }
-    table { border-collapse: collapse; width: 100%; max-width: 900px; }
-    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-    th { background: #f5f5f5; }
-    .mono { font-variant-numeric: tabular-nums; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .pill { display:inline-block; padding:2px 8px; border-radius:12px; background:#efefef; margin-left:6px; font-size:12px; }
-    .muted { color:#666; font-size: 14px; margin: 4px 0 16px; }
-  </style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Season — MatchM8</title>
+  <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <h1>Season Leaderboard</h1>
-  <div id="meta" class="muted"></div>
+  <div id="hero" data-page="Season"></div>
+  <script src="/hero.js" defer></script>
 
-  <table id="seasonTable">
-    <thead>
-      <tr>
-        <th>#</th>
-        <th>Player</th>
-        <th class="mono">Total</th>
-        <th class="mono">Exact (5)</th>
-        <th class="mono">Result (2)</th>
-        <th class="mono">Weeks</th>
-        <th>By Week</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  </table>
+  <main class="container narrow">
+    <div class="panel" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+      <div class="center" style="gap:8px;flex-wrap:wrap">
+        <button id="btnRefresh" class="btn">Refresh</button>
+        <button id="btnCSV" class="btn">Download CSV</button>
+      </div>
+      <div id="meta" style="color:var(--muted);font-size:.95rem"></div>
+    </div>
 
-  <script defer src="/js/season_flow.js"></script>
+    <div class="panel">
+      <table class="table" id="tbl">
+        <thead>
+          <tr>
+            <th style="width:72px">Rank</th>
+            <th>Player</th>
+            <th class="right">Total Points</th>
+            <th class="right">Weeks Played</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div id="empty" style="padding:8px;color:var(--muted);display:none">
+        No season totals yet. Finalise at least one week on the Scoring page.
+      </div>
+    </div>
+  </main>
+
+  <script>
+  const $ = s => document.querySelector(s);
+  const tbody = $('#tbl tbody');
+  const empty = $('#empty');
+  const meta  = $('#meta');
+
+  // Normalise API shapes:
+  //  - Preferred: { seasonTotals: [{ player/name, totalPoints/weeksPlayed, ... }] }
+  //  - Fallbacks: array or legacy map (defensive)
+  function normaliseSeason(payload) {
+    let arr = Array.isArray(payload?.seasonTotals) ? payload.seasonTotals : payload;
+
+    const rows = [];
+    if (Array.isArray(arr)) {
+      for (const r of arr) {
+        rows.push({
+          name: String(r.player ?? r.name ?? '').trim(),
+          total: Number(r.totalPoints ?? r.total ?? 0),
+          weeks: Number(r.weeksPlayed ?? r.weeks_played ?? 0),
+        });
+      }
+    } else if (arr && typeof arr === 'object') {
+      for (const [, v] of Object.entries(arr)) {
+        rows.push({
+          name: String(v?.name ?? '').trim(),
+          total: Number(v?.total ?? 0),
+          weeks: Number(v?.weeks_played ?? 0),
+        });
+      }
+    }
+    rows.sort((a, b) => (b.total - a.total) || a.name.localeCompare(b.name));
+    return rows;
+  }
+
+  function render(rows, updatedAtISO) {
+    tbody.innerHTML = '';
+    if (!rows.length) {
+      empty.style.display = 'block';
+      meta.textContent = `Players: 0`;
+      return;
+    }
+    empty.style.display = 'none';
+
+    // Dense ranking (1,2,2,4 …)
+    let rank = 0, lastPts = null, shown = 0;
+    rows.forEach(r => {
+      rank++;
+      if (r.total !== lastPts) { shown = rank; lastPts = r.total; }
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${shown}</td>
+        <td>${r.name || '&nbsp;'}</td>
+        <td class="right">${Number.isFinite(r.total) ? r.total : ''}</td>
+        <td class="right">${Number.isFinite(r.weeks) ? r.weeks : ''}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+    const updated = updatedAtISO ? new Date(updatedAtISO).toLocaleString() : new Date().toLocaleString();
+    meta.textContent = `Players: ${rows.length} · Updated: ${updated}`;
+  }
+
+  async function loadSeason() {
+    try {
+      const url = `/api/scores/summary?t=${Date.now()}`;
+      const res = await fetch(url, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      const json = await res.json().catch(() => ({}));
+      const rows = normaliseSeason(json);
+      render(rows, json.updatedAtISO);
+    } catch (e) {
+      tbody.innerHTML = '';
+      empty.style.display = 'block';
+      meta.textContent = `Players: 0`;
+    }
+  }
+
+  function downloadCSV() {
+    // Build rows from the current table (so CSV mirrors the view)
+    const header = ['Rank','Player','Total Points','Weeks Played'];
+    const body = Array.from(tbody.querySelectorAll('tr')).map(tr =>
+      Array.from(tr.querySelectorAll('td')).map(td => td.textContent.trim())
+    );
+    if (!body.length) return;
+
+    const csv = [header, ...body].map(cols =>
+      cols.map(v => String(v).includes(',') ? `"${String(v).replace(/"/g,'""')}"` : v).join(',')
+    ).join('\r\n');
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'season-leaderboard.csv';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  // Wire up
+  $('#btnRefresh').addEventListener('click', loadSeason);
+  $('#btnCSV').addEventListener('click', downloadCSV);
+  window.addEventListener('keydown', e => { if ((e.key || '').toLowerCase() === 'r') loadSeason(); });
+
+  loadSeason();
+  </script>
 </body>
 </html>

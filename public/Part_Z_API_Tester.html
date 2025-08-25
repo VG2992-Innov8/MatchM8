@@ -1,16 +1,11 @@
-<!doctype html>
+﻿<!doctype html>
 <html>
 <head>
   <meta charset="utf-8" />
   <title>MatchM8 API Tester</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    body { font-family: system-ui, Arial; padding: 20px; }
-    button { margin: 4px 0; }
-    pre { background:#f6f6f6; padding:10px; border:1px solid #ddd; overflow:auto; }
-    input { padding:6px; margin:2px 0; width: 240px; }
-    label { display:block; margin-top:8px; }
-  </style>
+  
+  <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <h1>MatchM8 API Tester</h1>
@@ -19,23 +14,23 @@
     <h3>Auth PIN</h3>
     <label>Name <input id="name" value="Toby"></label>
     <label>PIN <input id="pin" value="1111"></label>
-    <button onclick="call('/api/auth/pin/set',{name:val('name'),pin:val('pin')})">Set PIN</button>
-    <button onclick="call('/api/auth/pin/verify',{name:val('name'),pin:val('pin')})">Verify PIN</button>
+    <button class="btn" onclick="call('/api/auth/pin/set',{name:val('name'),pin:val('pin')})">Set PIN</button>
+    <button class="btn" onclick="call('/api/auth/pin/verify',{name:val('name'),pin:val('pin')})">Verify PIN</button>
   </section>
 
   <section>
     <h3>Predictions</h3>
     <label>Week <input id="week" value="3"></label>
     <label>Player ID <input id="pid" value="1"></label>
-    <button onclick="savePreds()">Save Predictions (2 fixtures)</button>
+    <button class="btn" onclick="savePreds()">Save Predictions (2 fixtures)</button>
   </section>
 
   <section>
     <h3>Scoring</h3>
-    <button onclick="call('/api/scores/calc',{week:val('week'),overwrite:true})">Calculate & Save</button>
-    <button onclick="get('/api/scores/summary?week='+encodeURIComponent(val('week')))">Summary</button>
-    <button onclick="get('/api/scores/season')">Season</button>
-    <button onclick="get('/api/fixtures?week='+encodeURIComponent(val('week')))">Check Fixtures</button>
+    <button class="btn primary" onclick="call('/api/scores/calc',{week:val('week'),overwrite:true})">Calculate & Save</button>
+    <button class="btn" onclick="get('/api/scores/summary?week='+encodeURIComponent(val('week')))">Summary</button>
+    <button class="btn" onclick="get('/api/scores/season')">Season</button>
+    <button class="btn" onclick="get('/api/fixtures?week='+encodeURIComponent(val('week')))">Check Fixtures</button>
 
   </section>
 
@@ -70,3 +65,5 @@ async function savePreds(){
 </script>
 </body>
 </html>
+
+

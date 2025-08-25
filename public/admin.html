@@ -1,80 +1,11 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>MatchM8 – Admin</title>
-  <style>
-    body {
-      background-color: #a9dcf5;
-      font-family: sans-serif;
-      margin: 0;
-      padding: 0;
-    }
-
-    .title-bar, .league-bar, .subtitle-bar {
-      width: 100%;
-      padding: 15px;
-      background-color: #42bff5;
-      border-bottom: 2px solid black;
-      text-align: center;
-      font-weight: bold;
-    }
-
-    .title-bar {
-      font-size: 24px;
-    }
-
-    .league-bar {
-      font-size: 20px;
-    }
-
-    .subtitle-bar {
-      font-size: 18px;
-    }
-
-    .admin-box {
-      background: white;
-      border: 2px solid #222;
-      border-radius: 10px;
-      padding: 30px;
-      max-width: 400px;
-      margin: 50px auto;
-      text-align: center;
-    }
-
-    input[type="password"], input[type="text"] {
-      width: 100%;
-      padding: 12px;
-      margin: 10px 0;
-      font-size: 16px;
-      border-radius: 6px;
-      border: 1px solid #ccc;
-    }
-
-    .matchm8-button {
-      display: block;
-      width: 100%;
-      margin-top: 20px;
-      padding: 12px;
-      font-size: 16px;
-      background-color: #42bff5;
-      border: 2px solid black;
-      border-radius: 10px;
-      font-weight: bold;
-      cursor: pointer;
-    }
-
-    .matchm8-button:hover {
-      background-color: #1ca1dc;
-    }
-
-    .confirmation-message {
-      margin-top: 20px;
-      font-weight: bold;
-      color: green;
-    }
-  </style>
+  
+  <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <div class="title-bar">MatchM8 Soccer Predictions</div>
@@ -83,7 +14,7 @@
 
   <div class="admin-box">
     <input type="password" id="adminToken" placeholder="Enter Admin Token" />
-    <button class="matchm8-button" onclick="useToken()">Use Token</button>
+    <button class="btn matchm8-button primary" onclick="useToken()">Use Token</button>
     <div id="confirmation" class="confirmation-message"></div>
   </div>
 
@@ -105,3 +36,5 @@
   </script>
 </body>
 </html>
+
+

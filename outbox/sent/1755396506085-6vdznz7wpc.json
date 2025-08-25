@@ -1,0 +1,12 @@
+{
+  "to": "vince@example.com",
+  "subject": "Your MatchM8 picks for Week 2 (Complete)",
+  "html": "\n          <div style=\"font-family:system-ui,Segoe UI,Roboto,Arial;\">\n            <h2>Your MatchM8 picks — Week 2 (Complete)</h2>\n            <p>Hi Vince, here’s your receipt. You can edit picks until each match locks.</p>\n            <table style=\"border-collapse:collapse;border:1px solid #ddd;\">\n              <thead><tr>\n                <th style=\"padding:6px 8px;border:1px solid #ddd;\">Home</th>\n                <th style=\"padding:6px 8px;border:1px solid #ddd;\">Away</th>\n                <th style=\"padding:6px 8px;border:1px solid #ddd;\">Your Pick</th>\n                <th style=\"padding:6px 8px;border:1px solid #ddd;\">Kickoff (local)</th>\n              </tr></thead>\n              <tbody><tr>\n            <td style=\"padding:4px 8px;border:1px solid #ddd;\">Arsenal</td>\n            <td style=\"padding:4px 8px;border:1px solid #ddd;\">Leeds</td>\n            <td style=\"padding:4px 8px;border:1px solid #ddd;\">D</td>\n            <td style=\"padding:4px 8px;border:1px solid #ddd;\">17/08/2025, 12:43:47 pm</td>\n          </tr><tr>\n            <td style=\"padding:4px 8px;border:1px solid #ddd;\">Spurs</td>\n            <td style=\"padding:4px 8px;border:1px solid #ddd;\">Brentford</td>\n            <td style=\"padding:4px 8px;border:1px solid #ddd;\">H</td>\n            <td style=\"padding:4px 8px;border:1px solid #ddd;\">17/08/2025, 1:43:47 pm</td>\n          </tr></tbody>\n            </table>\n            <p style=\"color:#666\">Submitted: 17/08/2025, 12:08:21 pm</p>\n          </div>\n        ",
+  "text": "Your MatchM8 picks — Week 2 (Complete)\nArsenal vs Leeds | Pick: D | Kickoff: 17/08/2025, 12:43:47 pm\nSpurs vs Brentford | Pick: H | Kickoff: 17/08/2025, 1:43:47 pm\nSubmitted: 17/08/2025, 12:08:21 pm",
+  "meta": {
+    "kind": "receipt",
+    "week": 2,
+    "player_id": "1"
+  },
+  "simulated": true
+}

@@ -1,4 +1,4 @@
-// nav-active.js — highlights the current tab in the top nav
+// nav-active.js Ã¢â‚¬" highlights the current tab in the top nav
 (function () {
   try {
     // current file (fallback to index.html), ignore trailing slash
