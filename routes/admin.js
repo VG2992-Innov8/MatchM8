@@ -1,4 +1,4 @@
-// routes/admin.js — cleaned & secured
+// routes/admin.js Ã¢â‚¬" cleaned & secured
 const express = require('express');
 const path = require('path');
 const fs = require('fs');              // sync FS
@@ -139,33 +139,104 @@ router.get('/results', (req, res) => {
 });
 
 /* ---------- 4) Upload predictions CSV ---------- */
-router.post('/predictions/upload', (req, res) => {
+// tolerant CSV (handles quotes, doubled quotes, BOM, empty cells); header is lowercased
+function parseCsvTolerant(text) {
+  text = String(text || '').replace(/^\uFEFF/, '');
+  const lines = text.split(/\r?\n/).filter(l => l.trim().length);
+  if (!lines.length) return { header: [], rows: [] };
+
+  const splitLine = (line) => {
+    const out = [];
+    let cur = '', inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (inQ) {
+        if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; continue; }
+        if (ch === '"') { inQ = false; continue; }
+        cur += ch;
+      } else {
+        if (ch === '"') { inQ = true; continue; }
+        if (ch === ',') { out.push(cur); cur = ''; continue; }
+        cur += ch;
+      }
+    }
+    out.push(cur);
+    return out;
+  };
+
+  const header = splitLine(lines[0]).map(h => h.trim().toLowerCase());
+  const rows = lines.slice(1).map(line => {
+    const cells = splitLine(line);
+    const row = {};
+    header.forEach((h, i) => { row[h] = (cells[i] ?? '').trim(); });
+    return row;
+  });
+  return { header, rows };
+}
+
+router.post('/predictions/upload', express.json(), async (req, res) => {
   try {
     const { week, csv } = req.body || {};
-    if (!week || !csv) return res.status(400).json({ ok: false, error: 'week and csv required' });
-
-    const rows = parseCsv(csv);
-    const outPath = path.join(DATA_DIR, 'predictions', `week-${week}.json`);
-    const map = {};
-
-    for (const r of rows) {
-      const id = r.player_id || r.id || r.playerId;
-      if (!id) continue;
-      let list = [];
-      try { list = r.predictions ? JSON.parse(r.predictions) : []; }
-      catch (e) { return res.status(400).json({ ok: false, error: `bad_predictions_json for player_id=${id}: ${e.message}` }); }
-
-      map[id] = {
-        predictions: Array.isArray(list) ? list : [],
-        submitted_at: r.submitted_at || new Date().toISOString(),
-        email_sent_at: r.email_sent_at || null
-      };
+    const wk = parseInt(week, 10);
+    if (!Number.isFinite(wk) || wk < 1) {
+      return res.status(400).json({ error: 'bad_week', detail: String(week) });
+    }
+    if (!csv || typeof csv !== 'string') {
+      return res.status(400).json({ error: 'missing_csv' });
     }
 
-    fs.mkdirSync(path.dirname(outPath), { recursive: true });
-    fs.writeFileSync(outPath, JSON.stringify(map, null, 2), 'utf8');
-    return res.json({ ok: true, imported: Object.keys(map).length });
-  } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+    const { header, rows } = parseCsvTolerant(csv);
+    // Only require player_id and predictions; timestamps optional
+    const need = ['player_id', 'predictions'];
+    const missing = need.filter(k => !header.includes(k));
+    if (missing.length) {
+      return res.status(400).json({ error: 'bad_header', missing });
+    }
+
+    // Load existing (map expected). If an older file is an array, convert to a map.
+    const fpath = path.join(DATA_DIR, 'predictions', `week-${wk}.json`);
+    let existing = readJsonSync(fpath, {});
+    if (Array.isArray(existing)) {
+      const conv = {};
+      for (const r of existing) {
+        if (r && r.player_id) conv[String(r.player_id)] = r;
+      }
+      existing = conv;
+    } else if (!existing || typeof existing !== 'object') {
+      existing = {};
+    }
+
+    let imported = 0;
+    for (const r of rows) {
+      if (!r.player_id) continue;
+
+      let predsArr;
+      try {
+        predsArr = JSON.parse(r.predictions);
+      } catch {
+        const fixed = r.predictions.replace(/""/g, '"'); // CSV doubled quotes -> JSON quotes
+        predsArr = JSON.parse(fixed);
+      }
+      if (!Array.isArray(predsArr)) {
+        return res.status(400).json({ error: 'predictions_not_array', row: r });
+      }
+
+      const key = String(r.player_id);
+      existing[key] = {
+        player_id: key,
+        predictions: predsArr,
+        submitted_at: r.submitted_at || null,
+        email_sent_at: r.email_sent_at || null,
+      };
+      imported++;
+    }
+
+    writeJsonSync(fpath, existing);
+    return res.json({ ok: true, week: wk, imported, total_players: Object.keys(existing).length });
+  } catch (e) {
+    console.error('upload predictions error:', e);
+    return res.status(400).json({ error: 'csv_parse_error', detail: e.message });
+  }
 });
 
 /* ---------- 5) Download predictions CSV ---------- */
@@ -175,9 +246,16 @@ router.get('/predictions/download', (req, res) => {
     if (!week) return res.status(400).json({ ok: false, error: 'week required' });
 
     const p = path.join(DATA_DIR, 'predictions', `week-${week}.json`);
-    const data = readJsonSync(p, {});
-    const rows = [];
+    let data = readJsonSync(p, {});
 
+    // If someone previously wrote an array, convert on the fly so the CSV is sane
+    if (Array.isArray(data)) {
+      const m = {};
+      for (const r of data) if (r && r.player_id) m[String(r.player_id)] = r;
+      data = m;
+    }
+
+    const rows = [];
     for (const [player_id, val] of Object.entries(data)) {
       rows.push({
         player_id,

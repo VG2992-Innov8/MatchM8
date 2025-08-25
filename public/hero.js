@@ -1,4 +1,4 @@
-// /public/hero.js — 3 header strips, centered text, stepped sizes, Admin only when verified
+// /public/hero.js Ã¢â‚¬" 3 header strips, centered text, stepped sizes, Admin only when verified
 (() => {
   const host = document.getElementById('hero');
   if (!host) return;

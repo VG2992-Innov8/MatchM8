@@ -255,3 +255,36 @@ label{font-weight:600; display:block; margin-bottom:6px}
 
 
 }
+/* === Predictions page: inline Results + Points === */
+#predTbl td, #predTbl th { padding-left: 8px; padding-right: 8px; }
+
+#predTbl .num-box {
+  width: 52px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+#predTbl .pts-badge {
+  min-width: 40px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  display: inline-block;
+}
+/* Inline Results + Points widget (predictions page) */
+.rpw-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 10px; /* nudges away from Away prediction box */
+}
+.rpw-wrap .num-box {
+  width: 52px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.rpw-wrap .pts-badge {
+  min-width: 40px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  display: inline-block;
+}

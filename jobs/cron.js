@@ -36,9 +36,9 @@ async function runReminder() {
     await enqueueEmail({
       to: pl.email,
       subject: `Reminder: Complete your picks (Week ${ACTIVE_WEEK})`,
-      text: `Hi ${pl.name || 'player'},\n\nYou’ve completed ${have}/${need} picks for Week ${ACTIVE_WEEK}.\nFirst kickoff: ${fmt(new Date(kicks[0]).toISOString())}\n\nFinish here: http://localhost:3000/ui/summary.html?week=${ACTIVE_WEEK}`,
+      text: `Hi ${pl.name || 'player'},\n\nYouÃ¢â‚¬â„¢ve completed ${have}/${need} picks for Week ${ACTIVE_WEEK}.\nFirst kickoff: ${fmt(new Date(kicks[0]).toISOString())}\n\nFinish here: http://localhost:3000/ui/summary.html?week=${ACTIVE_WEEK}`,
       html: `<p>Hi ${pl.name || 'player'},</p>
-<p>You’ve completed <strong>${have}/${need}</strong> picks for <strong>Week ${ACTIVE_WEEK}</strong>.</p>
+<p>YouÃ¢â‚¬â„¢ve completed <strong>${have}/${need}</strong> picks for <strong>Week ${ACTIVE_WEEK}</strong>.</p>
 <p>First kickoff: <strong>${fmt(new Date(kicks[0]).toISOString())}</strong></p>
 <p><a href="http://localhost:3000/ui/summary.html?week=${ACTIVE_WEEK}">Finish your picks</a></p>`,
       meta: { kind:'reminder', week: ACTIVE_WEEK, player_id: pl.id }

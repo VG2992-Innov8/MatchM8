@@ -1,4 +1,4 @@
-// routes/auth.js — bcrypt PIN set/verify/change (back-compatible) + whoami cookies
+// routes/auth.js Ã¢â‚¬" bcrypt PIN set/verify/change (back-compatible) + whoami cookies
 const express = require('express');
 const path = require('path');
 const { readFile } = require('fs/promises');

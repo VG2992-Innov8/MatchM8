@@ -48,7 +48,7 @@ async function savePredictionsForWeek(playerId, week, predictions) {
     body: JSON.stringify({ player_id: playerId, week, predictions })
   });
   if (res.ok) {
-    alert('Predictions saved ✅');
+    alert('Predictions saved Ã¢Å"â€¦');
   } else if (res.status === 401) {
     document.cookie = "pred_edit_token=; Max-Age=0; path=/";
     const retried = await ensurePinVerified(playerId);

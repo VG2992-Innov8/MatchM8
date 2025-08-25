@@ -1,124 +1,83 @@
-// routes/players.js — self-signup + name checks + demo cap
+// routes/players.js Ã¢â‚¬" self-signup + 5-player demo cap + license bypass
+
 const express = require('express');
 const path = require('path');
-const fs = require('fs');
+const { readFile } = require('fs/promises');
 const bcrypt = require('bcryptjs');
 const { writeJsonAtomic } = require('../utils/atomicJson');
 const license = require('../lib/license');
 
 const router = express.Router();
+const PLAYERS = path.join(__dirname, '..', 'data', 'players.json');
 
-const DATA_DIR = path.join(__dirname, '..', 'data');
-const PLAYERS_PATH = path.join(DATA_DIR, 'players.json');
+// ---- env / config ----
+const SKIP_LICENSE = String(process.env.DEMO_SKIP_LICENSE || '').toLowerCase() === 'true';
+const ALLOW_SELF = String(process.env.ALLOW_SELF_SIGNUP || '').toLowerCase() === 'true';
+const INVITE = (process.env.INVITE_CODE || '').trim();
+const WHITELIST = (process.env.WHITELIST_EMAIL_DOMAIN || '').trim().toLowerCase();
+const DEMO_CAP = parseInt(process.env.DEMO_PLAYERS_MAX || '', 10) || 0;
 
-// ---------- helpers ----------
-function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-}
+// ---- helpers ----
 async function loadPlayers() {
-  try { return JSON.parse(await fs.promises.readFile(PLAYERS_PATH, 'utf8')); }
+  try { return JSON.parse(await readFile(PLAYERS, 'utf8')); }
   catch { return []; }
 }
-async function savePlayers(list) {
-  ensureDataDir();
-  await writeJsonAtomic(PLAYERS_PATH, list);
-}
-function normName(s) { return String(s || '').trim().replace(/\s+/g, ' '); }
-function emailLooksValid(s) { return !!String(s||'').match(/^[^@\s]+@[^@\s]+\.[^@\s]+$/); }
-function sameName(a,b){ return a.localeCompare(b, undefined, { sensitivity: 'accent' }) === 0; }
+async function savePlayers(list) { await writeJsonAtomic(PLAYERS, list); }
 
-// Demo/License cap (take the stricter)
-const DEMO_CAP = parseInt(process.env.DEMO_PLAYERS_MAX || '', 10);
-function effectivePlayerCap() {
-  const st = (license && license.getStatus && license.getStatus()) ? license.getStatus() : {};
-  const licCap = (st && st.license && Number.isFinite(st.license.max_players)) ? st.license.max_players : undefined;
-
-  if (Number.isFinite(DEMO_CAP) && Number.isFinite(licCap)) return Math.min(DEMO_CAP, licCap);
-  if (Number.isFinite(DEMO_CAP)) return DEMO_CAP;
-  if (Number.isFinite(licCap)) return licCap;
-  return Infinity;
+function norm(s) { return String(s || '').trim(); }
+function emailDomainOk(email) {
+  if (!WHITELIST) return true;
+  const e = String(email || '').toLowerCase();
+  return e.endsWith('@' + WHITELIST);
 }
 
-// ---------- GET /api/players/check-name?name=Foo ----------
-router.get('/check-name', async (req, res) => {
-  const name = normName(req.query.name || '');
-  if (!name) return res.status(400).json({ ok:false, error:'name_required' });
-
-  const players = await loadPlayers();
-  const exists = players.some(p => sameName(normName(p.name), name));
-  return res.json({ ok:true, available: !exists });
+// ---- lightweight listings ----
+router.get('/', async (_req, res) => {
+  const list = await loadPlayers();
+  res.json(list.map(p => ({ id: p.id, name: p.name, has_pin: !!p.pin_hash })));
 });
 
-// ---------- POST /api/players/register ----------
-/*
-  body: { name, email?, pin, invite_code? }
-  Errors (strings aligned with your UI):
-    - self_signup_disabled (403)
-    - license_invalid (403)
-    - name_taken (409)
-    - pin_too_short (400)
-    - email_invalid_or_domain (400)
-    - bad_invite_code (403)
-    - max_players_reached (403)
-*/
+router.get('/check-name', async (req, res) => {
+  const name = norm(req.query.name).toLowerCase();
+  const list = await loadPlayers();
+  res.json({ taken: !!list.find(p => p.name.toLowerCase() === name) });
+});
+
+// ---- self-signup (public, respects license unless demo skip) ----
 router.post('/register', express.json(), async (req, res) => {
-  const ALLOW_SELF_SIGNUP = String(process.env.ALLOW_SELF_SIGNUP || '').toLowerCase() === 'true';
-  if (!ALLOW_SELF_SIGNUP) return res.status(403).json({ ok:false, error:'self_signup_disabled' });
+  const st = license.getStatus();
+  if (!SKIP_LICENSE && !st.ok) return res.status(403).json({ error: 'license_invalid' });
+  if (!ALLOW_SELF)            return res.status(403).json({ error: 'self_signup_disabled' });
 
-  // License must be valid
-  const st = license.getStatus ? license.getStatus() : { ok:true };
-  if (!st.ok) return res.status(403).json({ ok:false, error:'license_invalid' });
+  const name = norm(req.body?.name);
+  const email = norm(req.body?.email);
+  const pin   = norm(req.body?.pin);
+  const invite = norm(req.body?.invite_code);
 
-  const { name, email, pin, invite_code } = req.body || {};
-  const cleanedName = normName(name);
-
-  if (!cleanedName) return res.status(400).json({ ok:false, error:'name_required' });
-  if ((String(pin || '')).trim().length < 4) return res.status(400).json({ ok:false, error:'pin_too_short' });
-
-  // Optional invite code requirement
-  const REQUIRED_INVITE = (process.env.INVITE_CODE || '').trim();
-  if (REQUIRED_INVITE && String(invite_code || '').trim() !== REQUIRED_INVITE) {
-    return res.status(403).json({ ok:false, error:'bad_invite_code' });
-  }
-
-  // Optional email domain whitelist
-  const DOMAIN = (process.env.WHITELIST_EMAIL_DOMAIN || '').trim(); // e.g. "club.com"
-  if (email) {
-    if (!emailLooksValid(email)) return res.status(400).json({ ok:false, error:'email_invalid_or_domain' });
-    if (DOMAIN && !String(email).toLowerCase().endsWith('@' + DOMAIN.toLowerCase())) {
-      return res.status(400).json({ ok:false, error:'email_invalid_or_domain' });
-    }
-  }
+  if (!name)                    return res.status(400).json({ error: 'name_required' });
+  if (pin.length < 4)           return res.status(400).json({ error: 'pin_too_short' });
+  if (INVITE && invite !== INVITE) return res.status(403).json({ error: 'bad_invite_code' });
+  if (email && !emailDomainOk(email)) return res.status(400).json({ error: 'email_invalid_or_domain' });
 
   const players = await loadPlayers();
-
-  // Enforce max players (demo cap + license cap; uses stricter)
-  const activeCount = players.filter(p => !p.deleted).length;
-  const cap = effectivePlayerCap();
-  if (activeCount >= cap) {
-    return res.status(403).json({ ok:false, error:'max_players_reached' });
+  if (players.find(p => p.name.toLowerCase() === name.toLowerCase())) {
+    return res.status(409).json({ error: 'name_taken' });
   }
 
-  // Unique name (case-insensitive, accent-insensitive-ish)
-  const taken = players.some(p => sameName(normName(p.name), cleanedName));
-  if (taken) return res.status(409).json({ ok:false, error:'name_taken' });
+  // player cap: use demo cap if set, else license max if present
+  const maxPlayers = DEMO_CAP || (st.license && st.license.max_players) || Infinity;
+  if (players.length >= maxPlayers) {
+    return res.status(403).json({ error: 'max_players_reached' });
+  }
 
-  // Create new player
-  const id = String(Date.now()) + '_' + Math.random().toString(36).slice(2,8);
-  const pin_hash = await bcrypt.hash(String(pin), 10);
-
-  const record = {
-    id,
-    name: cleanedName,
-    email: email ? String(email).trim() : undefined,
-    pin_hash,
-    created_at: new Date().toISOString()
-  };
-
-  players.push(record);
+  const id = String(Date.now());
+  const pin_hash = await bcrypt.hash(pin, 10);
+  players.push({
+    id, name, email: email || undefined,
+    pin_hash, created_at: new Date().toISOString()
+  });
   await savePlayers(players);
-
-  return res.json({ ok:true, id, name: cleanedName });
+  res.json({ ok: true, id, name });
 });
 
 module.exports = router;

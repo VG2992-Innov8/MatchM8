@@ -1,4 +1,4 @@
-// routes/admin_auth.js — admin login & first-run password bootstrap
+// routes/admin_auth.js Ã¢â‚¬" admin login & first-run password bootstrap
 const express = require('express');
 const path = require('path');
 const { readFile } = require('fs/promises');
@@ -46,7 +46,7 @@ router.post('/login', express.json(), async (req, res) => {
   const { password } = req.body || {};
   const a = await readAdmin();
 
-  // First run: no password yet → tell client to bootstrap
+  // First run: no password yet Ã¢â€ ' tell client to bootstrap
   if (!a.pass_hash) {
     return res.status(409).json({ ok:false, error:'bootstrap_required' });
   }

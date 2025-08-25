@@ -24,7 +24,7 @@
 
   function render(data) {
     // summary
-    summary.textContent = `Fixtures with FT: ${data.scored_fixture_count}/${data.fixture_count}  —  timestamp: ${data.timestamp || "—"}`;
+    summary.textContent = `Fixtures with FT: ${data.scored_fixture_count}/${data.fixture_count}  Ã¢â‚¬"  timestamp: ${data.timestamp || "Ã¢â‚¬""}`;
 
     // table
     const rows = Object.values(data.totals || {}).sort((a, b) => b.total - a.total);

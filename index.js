@@ -78,10 +78,10 @@ license.loadAndValidate().then(s => { if (!SKIP_LICENSE) console.log('License:',
 app.get('/api/license/status', (_req, res) => res.json(license.getStatus()));
 
 // PUBLIC admin-auth endpoints (allowed even if license invalid)
-const ADMIN_PUBLIC = new Set(['/login', '/bootstrap', '/state', '/health']); // added /health
+const ADMIN_PUBLIC = new Set(['/login', '/bootstrap', '/state', '/health']);
 
 // helpful boot log so you can see the bypass is active
-if (SKIP_LICENSE) console.log('⚠️  DEMO_SKIP_LICENSE=true — bypassing license checks for /api/admin and /api/scores');
+if (SKIP_LICENSE) console.log('DEMO_SKIP_LICENSE=true - bypassing license checks for /api/admin and /api/scores');
 
 app.use('/api/admin', (req, res, next) => {
   // allow public admin endpoints through this gate
@@ -103,7 +103,6 @@ app.use('/api/scores', (req, res, next) => {
   if (!s.ok) return res.status(403).json({ error: 'License invalid: ' + s.reason });
   next();
 });
-
 
 /* -------------------- Global middleware -------------------- */
 // CORS allowlist via env: CORS_ORIGIN="http://localhost:3000,https://your.site"
@@ -161,7 +160,7 @@ app.post('/api/config', requireAdminToken, (req, res) => {
 /* -------------------- Safe require + mount -------------------- */
 function safeRequire(label, p) {
   try { return { ok: true, mod: require(p) }; }
-  catch (e) { console.warn(`⚠️  Skipping ${label}:`, e.message); return { ok: false, mod: null }; }
+  catch (e) { console.warn(`Skipping ${label}:`, e.message); return { ok: false, mod: null, reason: e.message }; }
 }
 function mount(label, route, mod) {
   app.use(route, mod);
@@ -233,9 +232,48 @@ if (admin.ok) {
   mount('./routes/admin.js', '/api/admin', admin.mod);
 }
 
+// ---- Locks route (license-gated unless demo bypass) ----
+{
+  const locksRt = safeRequire('./routes/locks.js', './routes/locks');
+  if (locksRt.ok) {
+    const locksGate = (req, res, next) => {
+      if (SKIP_LICENSE) return next();
+      const s = license.getStatus();
+      if (!s.ok) return res.status(403).json({ error: 'License invalid: ' + s.reason });
+      next();
+    };
+    app.use('/api/locks', locksGate, locksRt.mod);
+    mounted.push({ label: './routes/locks.js', route: '/api/locks' });
+  } else {
+    console.warn('Skipping ./routes/locks.js:', locksRt.reason || 'failed to load');
+  }
+}
+
+// ---- Admin reminders (under /api/admin; router also checks x-admin-token) ----
+{
+  const remindersRt = safeRequire('./routes/admin-reminders.js', './routes/admin-reminders');
+  if (remindersRt.ok) {
+    app.use('/api/admin/reminders', remindersRt.mod);
+    mounted.push({ label: './routes/admin-reminders.js', route: '/api/admin/reminders' });
+  } else {
+    console.warn('Skipping ./routes/admin-reminders.js:', remindersRt.reason || 'failed to load');
+  }
+}
+
 /* -------------------- Diagnostics -------------------- */
 app.get('/api/__health', (_req, res) => res.json({ ok: true, mounted }));
 app.get('/api/__routes', (_req, res) => res.json(mounted));
+
+// ---- Start reminders scheduler once ----
+const remindersSvc = safeRequire('./services/reminders.js', './services/reminders');
+if (remindersSvc.ok && typeof remindersSvc.mod?.startScheduler === 'function') {
+  if (!global.__REMINDERS_STARTED__) {
+    remindersSvc.mod.startScheduler();
+    global.__REMINDERS_STARTED__ = true;
+  }
+} else {
+  console.warn('Reminders service not started:', remindersSvc.reason || 'no startScheduler()');
+}
 
 /* -------------------- Map legacy UI pages -------------------- */
 ['Part_A_PIN.html', 'Part_B_Predictions.html', 'Part_D_Scoring.html', 'Part_E_Season.html']
@@ -248,5 +286,5 @@ app.get('/', (_req, res) => res.redirect('/Part_A_PIN.html'));
 
 /* -------------------- Listen -------------------- */
 app.listen(PORT, () => {
-  console.log(`✅ MatchM8 listening on http://localhost:${PORT}`);
+  console.log(`MatchM8 listening on http://localhost:${PORT}`);
 });

@@ -15,7 +15,7 @@
   }
 
   function goToPredictions({ week, player_id }) {
-    // ✅ Build URL safely; DO NOT encode the whole URL
+    // Ã¢Å"â€¦ Build URL safely; DO NOT encode the whole URL
     const url = new URL('/Part_B_Predictions.html', window.location.origin);
     url.search = new URLSearchParams({ week: String(week), player_id: String(player_id) }).toString();
     window.location.href = url.toString();

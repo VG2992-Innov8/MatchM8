@@ -1,7 +1,8 @@
-{
-  "1": {
-    "name": "Vince",
-    "total": 6,
-    "weeks_played": 2
+[
+  {
+    "player_id": "1756082604811",
+    "player": "Vince",
+    "totalPoints": 7,
+    "weeksPlayed": 2
   }
-}
+]

@@ -5,6 +5,33 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Predictions — MatchM8</title>
   <link rel="stylesheet" href="/styles.css">
+  <style>
+    .lock-pill{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:999px;border:1px solid var(--border,#1f2937);font-size:12px;opacity:.8}
+    .muted{opacity:.6}
+
+    /* --- One-line match rows --- */
+    .match .line{display:flex;align-items:center;gap:10px;flex-wrap:nowrap}
+    .match .no{width:26px;text-align:right}
+    .match .team{min-width:120px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .match .sep{margin:0 8px}
+    .match input.pred{width:56px;text-align:right}
+
+    /* --- Inline Results + Points widget --- */
+    .rpw-wrap{display:inline-flex;align-items:center;gap:6px;margin-left:10px;flex:0 0 auto;white-space:nowrap}
+    .rpw-wrap .num-box{
+      width:44px !important;           /* defeat any global width */
+      padding:2px 6px;
+      box-sizing:border-box;
+      text-align:right;
+      font-variant-numeric:tabular-nums;
+    }
+    .rpw-wrap .pts-badge{
+      min-width:34px;
+      text-align:right;
+      font-variant-numeric:tabular-nums;
+      display:inline-block;
+    }
+  </style>
 </head>
 <body>
   <div id="hero" data-page="Predictions"></div>
@@ -12,145 +39,288 @@
 
   <main class="container wide">
     <h2 id="weekLabel" class="subhead"></h2>
-
     <div class="panel">
       <div class="center">
         <label for="week" class="visually-hidden">Week</label>
         <input id="week" class="input" type="number" min="1" value="1" style="max-width:120px">
-        <button id="load" class="btn">Load Fixtures</button>
-        <button id="save" class="btn primary">Save Predictions</button>
+        <button id="load" class="btn" type="button">Load Fixtures</button>
+        <button id="save" class="btn primary" type="button">Save Predictions</button>
         <a id="toScoring" class="btn" href="/Part_D_Scoring.html">Go to Scoring</a>
       </div>
-      <div id="banner" class="banner ok" style="display:none;margin-top:12px;">✅ Saved locally.</div>
+      <div id="banner" class="banner ok" style="display:none;margin-top:12px;">✅ Saved.</div>
+      <div id="noFx" class="banner" style="display:none;margin-top:12px;">No fixtures yet for this week.</div>
+      <div id="lockedAll" class="banner" style="display:none;margin-top:12px;">⏳ Locked for this week (deadline reached).</div>
     </div>
 
     <div id="matches"></div>
   </main>
 
   <script>
-  // ---------- setup ----------
-  const qs = new URLSearchParams(location.search);
-  const weekInput  = document.getElementById('week');
-  const weekLabel  = document.getElementById('weekLabel');
-  const toScoring  = document.getElementById('toScoring');
+    // ------- config -------
+    let TOTAL_WEEKS = 38;
+    let CURRENT_WEEK = 1;
+    let LOCK_MINS = 10;
+    let DEADLINE_MODE = 'first_kickoff'; // or 'per_match'
 
-  let TOTAL_WEEKS = 38;  // fallback until /api/config returns
+    const qs = new URLSearchParams(location.search);
+    const weekInput = document.getElementById('week');
+    const saveBtn   = document.getElementById('save');
+    const noFxMsg   = document.getElementById('noFx');
+    const lockedAllMsg = document.getElementById('lockedAll');
+    let lastFixtures = [];
+    let lockTimer = null;
+    let resultsTimer = null;
 
-  function setScoringLink(){
-    const w = Number(weekInput.value) || 1;
-    toScoring.href = `/Part_D_Scoring.html?week=${w}`;
-  }
+    const clamp = n => Math.min(Math.max(1, n|0), TOTAL_WEEKS);
 
-  function updateWeekLabel(){
-    const w = Number(weekInput.value) || 1;
-    weekLabel.textContent = `Week ${w} of ${TOTAL_WEEKS}`;
-    setScoringLink();
-  }
-
-  async function initWeekAndTotals(){
-    // Prefer /api/config, fall back to URL ?week or 1
-    const urlWeek = Number(qs.get('week'));
-    try {
-      const res = await fetch('/api/config');
-      if (!res.ok) throw 0;
-      const cfg = await res.json();
-      TOTAL_WEEKS = cfg.total_weeks || 38;
-      weekInput.value = Number.isFinite(urlWeek) ? urlWeek : (cfg.current_week || 1);
-    } catch {
-      weekInput.value = Number.isFinite(urlWeek) ? urlWeek : 1;
-      TOTAL_WEEKS = TOTAL_WEEKS || 38;
+    function setScoringLink(){
+      const wk = clamp(Number(weekInput.value || 1));
+      document.getElementById('toScoring').href = `/Part_D_Scoring.html?week=${wk}`;
     }
-    updateWeekLabel();
-  }
-
-  // ---------- data / render ----------
-  async function fetchFixtures(week){
-    try{
-      const res = await fetch(`/api/fixtures?week=${week}`);
-      if(!res.ok) throw new Error('bad status '+res.status);
-      const data = await res.json();
-      // accept either an array or {fixtures:[...]}
-      const list = Array.isArray(data) ? data : (Array.isArray(data.fixtures) ? data.fixtures : []);
-      if (!Array.isArray(list)) throw new Error('fixtures not array');
-      return list;
-    }catch(e){
-      console.warn('Using fallback fixtures (dev):', e.message);
-      return [
-        { id:'fixture_1', home:'Arsenal',  away:'Leeds' },
-        { id:'fixture_2', home:'Chelsea',  away:'Liverpool' },
-        { id:'fixture_3', home:'Spurs',    away:'Everton' },
-      ];
+    function setWeekLabel(){
+      const wk = clamp(Number(weekInput.value || 1));
+      document.getElementById('weekLabel').textContent = `Week ${wk} of ${TOTAL_WEEKS}`;
     }
-  }
 
-  function render(fixtures){
-    const root = document.getElementById('matches');
-    root.innerHTML = '';
-    fixtures.forEach((fx, i) => {
-      const row = document.createElement('div');
-      row.className = 'match';
-      row.innerHTML = `
-        <div class="line" data-id="${fx.id}">
-          <div class="no">${i+1}</div>
-          <div class="team">${fx.home}</div>
-          <input class="pred" type="number" min="0" inputmode="numeric" aria-label="${fx.home} goals">
-          <span class="sep">–</span>
-          <input class="pred" type="number" min="0" inputmode="numeric" aria-label="${fx.away} goals">
-          <div class="team">${fx.away}</div>
-        </div>`;
-      root.appendChild(row);
-    });
-  }
+    async function loadConfig() {
+      try {
+        const cfg = await fetch('/api/config', {cache:'no-store'}).then(r => r.json());
+        TOTAL_WEEKS    = Number(cfg.total_weeks || 38);
+        LOCK_MINS      = Number(cfg.lock_minutes_before_kickoff ?? cfg.lock_mins ?? 10);
+        DEADLINE_MODE  = (String(cfg.deadline_mode||'first_kickoff').toLowerCase() === 'per_match') ? 'per_match' : 'first_kickoff';
+        const urlWeek  = Number(qs.get('week'));
+        CURRENT_WEEK   = Number.isFinite(urlWeek) && urlWeek >= 1 ? urlWeek : Number(cfg.current_week || 1);
+      } catch {
+        TOTAL_WEEKS = 38; CURRENT_WEEK = 1; LOCK_MINS = 10; DEADLINE_MODE = 'first_kickoff';
+      }
+      weekInput.min = 1;
+      weekInput.max = TOTAL_WEEKS;
+      weekInput.value = clamp(CURRENT_WEEK);
+      setWeekLabel();
+      setScoringLink();
+    }
 
-  async function load(){
-    const week = Number(weekInput.value)||1;
-    updateWeekLabel(); // keep label in sync when loading
-    const fixtures = await fetchFixtures(week);
-    render(fixtures);
+    async function fetchFixtures(week){
+      try{
+        const res = await fetch(`/api/fixtures?week=${encodeURIComponent(week)}`, {cache:'no-store'});
+        if(!res.ok) return [];
+        const data = await res.json();
+        const list = Array.isArray(data) ? data : (Array.isArray(data.fixtures) ? data.fixtures : []);
+        return Array.isArray(list) ? list : [];
+      }catch{
+        return [];
+      }
+    }
 
-    // restore local predictions (dev convenience)
-    const key = `preds_week_${week}`;
-    const saved = JSON.parse(localStorage.getItem(key) || '[]');
-    saved.forEach(p=>{
-      const line = document.querySelector(`.line[data-id="${p.id}"]`);
-      if(!line) return;
-      const [h,a]=line.querySelectorAll('input.pred');
-      h.value = p.home ?? '';
-      a.value = p.away ?? '';
-    });
-  }
+    function render(fixtures){
+      lastFixtures = fixtures || [];
+      const root = document.getElementById('matches');
+      root.innerHTML = '';
 
-  async function save(){
-    const week = Number(weekInput.value)||1;
-    const lines = document.querySelectorAll('.line');
-    const predictions = Array.from(lines).map(line=>{
-      const [h,a]=line.querySelectorAll('input.pred');
-      return { id: line.dataset.id, home: h.value===''?null:Number(h.value), away: a.value===''?null:Number(a.value) };
-    });
+      if (!lastFixtures.length) {
+        noFxMsg.style.display = 'block';
+        lockedAllMsg.style.display = 'none';
+        saveBtn.disabled = true;
+        return;
+      }
+      noFxMsg.style.display = 'none';
 
-    // 1) Save locally (always)
-    localStorage.setItem(`preds_week_${week}`, JSON.stringify(predictions));
+      lastFixtures.forEach((fx, i) => {
+        const ko = fx.kickoff_iso || fx.kickoffISO || fx.kickoff || null;
+        const row = document.createElement('div');
+        row.className = 'match';
+        row.innerHTML = `
+          <div class="line" data-id="${fx.id}" data-ko="${ko||''}">
+            <div class="no">${i+1}</div>
+            <div class="team">${fx.home}</div>
+            <input class="pred" type="number" min="0" inputmode="numeric" aria-label="${fx.home} goals">
+            <span class="sep">–</span>
+            <input class="pred" type="number" min="0" inputmode="numeric" aria-label="${fx.away} goals">
+            <div class="team">${fx.away}</div>
 
-    // 2) Try POST to backend if available
-    try{
-      await fetch('/api/predictions', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ week, predictions })
+            <!-- Inline Results + Points -->
+            <span class="rpw-wrap" data-match-id="${fx.id}">
+              <input class="num-box rpw-h" type="text" readonly aria-label="Result home">
+              <input class="num-box rpw-a" type="text" readonly aria-label="Result away">
+              <span class="pts-badge rpw-pts"></span>
+            </span>
+
+            <span class="lock-pill muted" style="margin-left:10px;display:none" aria-hidden="true">🔒 Locked</span>
+          </div>`;
+        root.appendChild(row);
       });
-    }catch(e){ console.warn('Predictions POST skipped/failure (dev)', e); }
 
-    const b = document.getElementById('banner');
-    b.style.display='block'; setTimeout(()=>b.style.display='none',1400);
-  }
+      // after render, restore local predictions and then apply locking/results
+      restoreLocal();
+      applyLocks();               // initial pass
+      populateResults();          // initial results fill
 
-  // ---------- events ----------
-  document.getElementById('load').addEventListener('click', load);
-  document.getElementById('save').addEventListener('click', save);
-  weekInput.addEventListener('input', updateWeekLabel);
+      // refreshers
+      if (lockTimer) clearInterval(lockTimer);
+      lockTimer = setInterval(applyLocks, 15_000); // refresh every 15s
+      if (resultsTimer) clearInterval(resultsTimer);
+      resultsTimer = setInterval(populateResults, 20_000); // refresh results every 20s
+    }
 
-  // ---------- boot ----------
-  initWeekAndTotals().then(load);
+    function restoreLocal(){
+      const week = Number(weekInput.value);
+      const key = `preds_week_${week}`;
+      const saved = JSON.parse(localStorage.getItem(key) || '[]');
+      saved.forEach(p=>{
+        const line = document.querySelector(`.line[data-id="${p.id}"]`);
+        if(!line) return;
+        const [h,a]=line.querySelectorAll('input.pred');
+        h.value = (p.home ?? '') === null ? '' : p.home ?? '';
+        a.value = (p.away ?? '') === null ? '' : p.away ?? '';
+      });
+    }
+
+    function isLockedByTime(koMillis){
+      if (!koMillis) return false; // unknown kickoff => don’t lock on time
+      const lockTime = koMillis - LOCK_MINS * 60_000;
+      return Date.now() >= lockTime;
+    }
+
+    function applyLocks(){
+      const lines = Array.from(document.querySelectorAll('.line'));
+      if (!lines.length) { saveBtn.disabled = true; return; }
+
+      // Determine global lock for first_kickoff
+      let allLock = false;
+      if (DEADLINE_MODE === 'first_kickoff') {
+        const times = lines
+          .map(l => Date.parse(l.dataset.ko || '') || NaN)
+          .filter(t => Number.isFinite(t));
+        if (times.length) {
+          const earliest = Math.min(...times);
+          allLock = isLockedByTime(earliest);
+        }
+      }
+
+      let anyEditable = false;
+      lines.forEach(line=>{
+        const [h,a]=line.querySelectorAll('input.pred');
+        const tag = line.querySelector('.lock-pill');
+        const koMs = Date.parse(line.dataset.ko || '') || NaN;
+
+        const locked = allLock || (DEADLINE_MODE === 'per_match' && Number.isFinite(koMs) && isLockedByTime(koMs));
+        h.disabled = a.disabled = locked;
+        tag.style.display = locked ? 'inline-flex' : 'none';
+
+        if (!locked) anyEditable = true;
+      });
+
+      lockedAllMsg.style.display = (DEADLINE_MODE === 'first_kickoff' && allLock) ? 'block' : 'none';
+      saveBtn.disabled = !anyEditable;
+    }
+
+    async function load(){
+      weekInput.value = clamp(Number(weekInput.value || 1));
+      setWeekLabel();
+      setScoringLink();
+
+      const week = Number(weekInput.value);
+      const fixtures = await fetchFixtures(week);
+      render(fixtures);
+    }
+
+    async function save(){
+      const lines = document.querySelectorAll('.line');
+      if (!lines.length) { noFxMsg.style.display='block'; return; }
+
+      const week = Number(weekInput.value);
+
+      // Build predictions, skipping locked rows
+      const predictions = Array.from(lines).map(line=>{
+        const [h,a]=line.querySelectorAll('input.pred');
+        if (h.disabled || a.disabled) return null;
+        return { id: line.dataset.id, home: h.value === '' ? null : Number(h.value), away: a.value === '' ? null : Number(a.value) };
+      }).filter(Boolean);
+
+      // Keep a local backup for UX
+      localStorage.setItem(`preds_week_${week}`, JSON.stringify(predictions));
+
+      // include player_id (from login) + send header too
+      const player_id = (localStorage.getItem('player_id') || '').trim();
+
+      try{
+        await fetch('/api/predictions', {
+          method:'POST',
+          headers: { 'Content-Type':'application/json', ...(player_id ? { 'x-player-id': player_id } : {}) },
+          body: JSON.stringify({ week, player_id, predictions })
+        });
+      }catch{}
+
+      const b = document.getElementById('banner');
+      b.style.display='block'; setTimeout(()=>b.style.display='none',1400);
+    }
+
+    // --- Results inline population ---
+    function getIdentity(){
+      const s = window.localStorage || {};
+      const qs = new URLSearchParams(location.search);
+      return {
+        id: (qs.get('player_id') || qs.get('playerId') || s.player_id || s.playerId || '').toString(),
+        name: (qs.get('name') || qs.get('player') || s.player_name || s.playerName || '').toString()
+      };
+    }
+    async function fetchLockInfo(week){
+      try{
+        const r = await fetch(`/api/locks?week=${encodeURIComponent(week)}`, { cache:'no-store' });
+        if (!r.ok) return null;
+        return await r.json();
+      }catch{ return null; }
+    }
+    async function fetchPlayerWeek(week, who){
+      if (!who.id && !who.name) return null;
+      const q = new URLSearchParams({ week: String(week) });
+      if (who.id) q.set('player_id', who.id); else q.set('name', who.name);
+      try{
+        const r = await fetch(`/api/scores/player-week?${q.toString()}`, { cache:'no-store' });
+        if (!r.ok) return null;
+        const data = await r.json();
+        return new Map((data.rows||[]).map(r => [String(r.matchId), r]));
+      }catch{ return null; }
+    }
+    function setWidget(matchId, row, showBlank){
+      const wrap = document.querySelector(`.rpw-wrap[data-match-id="${CSS.escape(String(matchId))}"]`);
+      if (!wrap) return;
+      const h = wrap.querySelector('.rpw-h');
+      const a = wrap.querySelector('.rpw-a');
+      const p = wrap.querySelector('.rpw-pts');
+      if (showBlank || !row || !row.result) {
+        h.value = ''; a.value = ''; p.textContent = '';
+      } else {
+        h.value = Number.isFinite(row.result.home) ? row.result.home : '';
+        a.value = Number.isFinite(row.result.away) ? row.result.away : '';
+        p.textContent = Number.isFinite(row.points) ? `+${row.points}` : '';
+      }
+    }
+    async function populateResults(){
+      const week = Number(weekInput.value || 1);
+      const who  = getIdentity();
+      const [locks, rowsMap] = await Promise.all([fetchLockInfo(week), fetchPlayerWeek(week, who)]);
+      const weekLocked = (locks?.mode === 'first_kickoff') ? !!locks.weekLocked : null;
+
+      // For each line, fill widget (blank when week not locked in first_kickoff)
+      document.querySelectorAll('.line').forEach(line=>{
+        const id = line.dataset.id;
+        const row = rowsMap ? rowsMap.get(String(id)) : null;
+        setWidget(id, row, weekLocked === false);
+      });
+    }
+
+    // ---- wires ----
+    document.getElementById('load').addEventListener('click', load);
+    document.getElementById('save').addEventListener('click', save);
+    weekInput.addEventListener('change', () => {
+      weekInput.value = clamp(Number(weekInput.value || 1));
+      setWeekLabel();
+      setScoringLink();
+      load(); // reload fixtures + results on week change
+    });
+
+    (async () => { await loadConfig(); await load(); })();
   </script>
 </body>
 </html>

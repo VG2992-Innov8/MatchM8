@@ -7,50 +7,44 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="/styles.css">
 
-  <!-- Scoped sizing just for this page -->
   <style>
-    /* Add Fixtures table sizing */
     #addFixturesTbl { table-layout: fixed; width: 100%; }
-    #addFixturesTbl th:nth-child(1) { width: 56px; }               /* # */
+    #addFixturesTbl th:nth-child(1) { width: 56px; }
     #addFixturesTbl th:nth-child(2),
-    #addFixturesTbl th:nth-child(3) { width: 34%; }                /* Home/Away */
+    #addFixturesTbl th:nth-child(3) { width: 34%; }
     #addFixturesTbl th:nth-child(4),
-    #addFixturesTbl th:nth-child(5) { width: 13%; }                /* Date/Time */
+    #addFixturesTbl th:nth-child(5) { width: 13%; }
     #addFixturesTbl td input.input {
       width: 100%; min-width: 0; font-size: 18px; padding: 12px 14px; box-sizing: border-box;
     }
-    /* Slightly roomier inputs on this page */
     .input { font-size: 16px; padding: 10px 12px; }
   </style>
 </head>
 <body>
-  <!-- Reusable 3-bar header -->
   <div id="hero" data-page="Admin"></div>
   <script src="/hero.js" defer></script>
 
   <main class="container wide">
-    <!-- Title / Token badge -->
     <div class="panel" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
       <h1 id="title" style="margin:0">Admin — Week <span id="weekTitle">?</span></h1>
       <span id="devBadge" title="ADMIN_TOKEN required" style="color:var(--muted);font-weight:700">token required</span>
     </div>
 
-    <!-- Week controls + token -->
     <div class="panel">
       <div class="center" style="gap:8px; flex-wrap:wrap;">
         <label for="week" style="margin-right:6px;">Week:</label>
         <input id="week" class="input" type="number" min="1" value="1" style="max-width:100px" />
-        <button class="btn primary" id="btnLoadPrev">Load Preview</button>
-        <button class="btn primary" id="btnCompute">Compute Scores</button>
+        <button class="btn primary" id="btnLoadPrev" type="button">Load Preview</button>
+        <button class="btn primary" id="btnCompute"  type="button">Compute Scores</button>
       </div>
       <div class="center" style="margin-top:10px; gap:8px; flex-wrap:wrap;">
         <input id="token" class="input" type="text" placeholder="your_admin_token_here" style="max-width:360px;">
-        <button class="btn primary" id="btnUseToken">Use Token</button>
+        <button class="btn primary" id="btnUseToken" type="button">Use Token</button>
         <span id="tokenStatus" style="color:var(--muted)">Not set</span>
       </div>
     </div>
 
-    <!-- NEW: Season Settings -->
+    <!-- Season Settings -->
     <section class="panel" id="seasonPanel">
       <h2>Season Settings</h2>
       <div class="grid" style="grid-template-columns: repeat(4,minmax(160px,1fr)); gap:12px;">
@@ -101,7 +95,7 @@
       <strong>License:</strong> <span id="licText">Checking…</span>
     </div>
 
-    <!-- Reset Player PIN (Admin) -->
+    <!-- Reset Player PIN -->
     <div id="pinResetPanel" style="margin:12px 0; padding:12px; border:1px solid #d1d5db; border-radius:6px; background:#f9fafb;">
       <div style="font-weight:600; margin-bottom:8px;">Reset Player PIN</div>
       <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
@@ -111,16 +105,16 @@
         <label>New PIN:
           <input id="pinResetNew" class="input" type="password" placeholder="4+ digits" style="min-width:160px;">
         </label>
-        <button id="pinResetBtn" class="btn">Set PIN</button>
+        <button id="pinResetBtn" class="btn" type="button">Set PIN</button>
         <span id="pinResetMsg" style="margin-left:8px;"></span>
       </div>
       <div style="margin-top:8px;">
-        <button id="loadPlayersBtn" class="btn">Load Players</button>
+        <button id="loadPlayersBtn" class="btn" type="button">Load Players</button>
         <span id="playersSummary" style="margin-left:8px; opacity:.8;"></span>
       </div>
     </div>
 
-    <!-- RESULTS: auto-filled from fixtures for the week -->
+    <!-- RESULTS -->
     <div class="panel" id="previewCard">
       <div class="center" style="justify-content:space-between; width:100%;">
         <strong>Results (for Week <span id="weekTitleInline">?</span>)</strong>
@@ -140,12 +134,12 @@
           <tbody></tbody>
         </table>
         <div class="center" style="justify-content:flex-end; margin-top:10px; width:100%;">
-          <button id="btnSaveResults" class="btn primary">Save Results</button>
+          <button id="btnSaveResults" class="btn primary" type="button">Save Results</button>
         </div>
       </div>
     </div>
 
-    <!-- ADD FIXTURES: manual 10-row entry -->
+    <!-- ADD FIXTURES -->
     <div class="panel">
       <strong>Add Fixtures (manual)</strong>
       <div style="color:var(--muted);margin:4px 0">Fill Home/Away (date/time optional). Blank rows are ignored.</div>
@@ -158,9 +152,9 @@
       </table>
 
       <div class="center" style="gap:8px;margin-top:8px">
-        <button id="btnBulkAddRows" class="btn">Add 10 Rows</button>
-        <button id="btnBulkClear" class="btn">Clear</button>
-        <button id="btnBulkSubmit" class="btn primary">Submit Fixtures</button>
+        <button id="btnBulkAddRows" class="btn" type="button">Add 10 Rows</button>
+        <button id="btnBulkClear"   class="btn" type="button">Clear</button>
+        <button id="btnBulkSubmit"  class="btn primary" type="button">Submit Fixtures</button>
       </div>
 
       <label class="center" style="gap:8px;margin-top:8px">
@@ -171,7 +165,7 @@
       <div id="bulkBanner" class="banner ok" style="display:none;margin-top:8px">✅ Fixtures saved.</div>
     </div>
 
-    <!-- MANAGE FIXTURES: delete individual rows -->
+    <!-- MANAGE FIXTURES -->
     <div class="panel" id="manageFixtures">
       <strong>Manage Fixtures (Week <span id="wkManage">?</span>)</strong>
       <div id="manageEmpty" style="margin-top:8px;color:var(--muted)">No fixtures yet.</div>
@@ -190,7 +184,7 @@
       <div style="margin-top:10px;">
         <div class="center" style="gap:8px;flex-wrap:wrap;">
           <input id="fileCsv" type="file" accept=".csv" />
-          <button class="btn primary" id="btnImportCsv">Import Fixtures CSV</button>
+          <button class="btn primary" id="btnImportCsv" type="button">Import Fixtures CSV</button>
         </div>
       </div>
 
@@ -198,16 +192,16 @@
         <label>Or paste Fixtures JSON</label>
         <textarea id="jsonBox" class="input" rows="5" placeholder='[{"id":"fixture_arsenal_spurs","home":"Arsenal","away":"Spurs","kickoff_iso":"2025-08-24T16:30:00Z"}]'></textarea>
         <div class="center" style="margin-top:8px; gap:8px;">
-          <button class="btn" id="btnImportJson">Import JSON</button>
-          <button class="btn" id="btnQuickSeed">Quick Seed 2 Future Fixtures</button>
+          <button class="btn" id="btnImportJson" type="button">Import JSON</button>
+          <button class="btn" id="btnQuickSeed"  type="button">Quick Seed 2 Future Fixtures</button>
         </div>
       </div>
 
       <hr class="mb-3" style="border:none;border-top:2px solid var(--border);margin:12px 0">
 
       <div class="center" style="margin-top:10px; gap:8px; flex-wrap:wrap;">
-        <button class="btn primary" id="btnPredsDownload">Download Predictions CSV</button>
-        <button class="btn primary" id="btnScoresDownload">Download Season Scores CSV</button>
+        <button class="btn primary" id="btnPredsDownload" type="button">Download Predictions CSV</button>
+        <button class="btn primary" id="btnScoresDownload" type="button">Download Season Scores CSV</button>
       </div>
 
       <div style="margin-top:12px;">
@@ -215,7 +209,7 @@
         <textarea id="csvPreds" class="input" rows="5" placeholder='player_id,predictions,submitted_at,email_sent_at
 "abc123","[{\"id\":\"fixture_arsenal_spurs\",\"home\":1,\"away\":0}]",2025-08-01T12:00:00Z,'></textarea>
         <div class="center" style="margin-top:8px; gap:8px;">
-          <button class="btn primary" id="btnPredsUpload">Upload Predictions</button>
+          <button class="btn primary" id="btnPredsUpload" type="button">Upload Predictions</button>
         </div>
       </div>
 
@@ -224,7 +218,7 @@
         <textarea id="csvScores" class="input" rows="4" placeholder='player_id,name,total,weeks_played
 "abc123","Vince",12,1'></textarea>
         <div class="center" style="margin-top:8px; gap:8px;">
-          <button class="btn" id="btnScoresUpload">Upload Scores</button>
+          <button class="btn" id="btnScoresUpload" type="button">Upload Scores</button>
         </div>
       </div>
     </div>
@@ -280,7 +274,7 @@
     async function apiFetch(url, opts = {}) {
       const headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
       const tok = getToken();
-      if (tok) headers['x-admin-token'] = tok; // header-based auth
+      if (tok) headers['x-admin-token'] = tok;
       const res = await fetch(url, { ...opts, headers });
       if (!res.ok) {
         const text = await res.text().catch(() => '');
@@ -302,7 +296,7 @@
       }
     }
 
-    /* --------- RESULTS preview (fixtures + results) --------- */
+    /* --------- RESULTS preview --------- */
     const previewEmpty = $('#previewEmpty');
     const previewWrap = $('#previewWrap');
     const previewStatus = $('#previewStatus');
@@ -322,7 +316,7 @@
       } catch (e) {
         showErr('Network error while loading preview: ' + e.message);
       }
-      await renderManage(); // keep Manage table in sync
+      await renderManage();
     }
 
     async function renderResultsEditable(week, resultsMap) {
@@ -350,13 +344,13 @@
           <td>${f.away || ''}</td>
           <td class="right">
             <input class="input" type="number" min="0" step="1"
-                  value="${(r.homeGoals ?? '')}" data-id="${f.id}" data-side="home"
-                  style="max-width:80px">
+                   value="${(r.homeGoals ?? '')}" data-id="${f.id}" data-side="home"
+                   style="max-width:80px">
           </td>
           <td class="right">
             <input class="input" type="number" min="0" step="1"
-                  value="${(r.awayGoals ?? '')}" data-id="${f.id}" data-side="away"
-                  style="max-width:80px">
+                   value="${(r.awayGoals ?? '')}" data-id="${f.id}" data-side="away"
+                   style="max-width:80px">
           </td>
         `;
         resultsTableBody.appendChild(tr);
@@ -460,7 +454,6 @@
       const tbody = bulkTbody(); if (!tbody) return;
       const rows = Array.from(tbody.querySelectorAll('tr'));
 
-      // Build new fixtures from the table
       const next = [];
       const seen = new Set();
       const toIso = (d,t)=> (d && t) ? new Date(`${d}T${t}`).toISOString() : null;
@@ -479,7 +472,6 @@
 
       const replace = document.getElementById('replaceMode')?.checked;
 
-      // Start from existing only if NOT replacing
       let fixtures = [];
       if (!replace) {
         try {
@@ -489,9 +481,8 @@
       }
 
       if (replace) {
-        fixtures = next;                            // ✅ full replace
+        fixtures = next;
       } else {
-        // Merge: replace by id or append
         next.forEach(n=>{
           const i = fixtures.findIndex(f=>f.id===n.id);
           if (i>=0) fixtures[i]=n; else fixtures.push(n);
@@ -505,8 +496,7 @@
           body: JSON.stringify({ week, fixtures })
         });
         const b = document.getElementById('bulkBanner'); if (b){ b.style.display='block'; setTimeout(()=>b.style.display='none',1400); }
-        await loadPreview();     // refresh Results + Manage
-        // reset entry grid
+        await loadPreview();
         const tb = bulkTbody(); tb.innerHTML=''; bulkAddRows(10);
       }catch(e){ showErr('Bulk submit failed: ' + e.message); }
     }
@@ -548,7 +538,7 @@
           <td>${ds}</td>
           <td>${ts}</td>
           <td class="right">
-            <button class="btn" data-action="del" data-id="${f.id}">Delete</button>
+            <button class="btn" data-action="del" data-id="${f.id}" type="button">Delete</button>
           </td>`;
         tbody.appendChild(tr);
       });
@@ -565,7 +555,7 @@
           body: JSON.stringify({ week, fixtures })
         });
         showOk('🗑️ Deleted ' + id);
-        await loadPreview();   // refresh Results + Manage
+        await loadPreview();
       }catch(e){ showErr('Delete failed: ' + e.message); }
     }
 
@@ -619,20 +609,22 @@
 
     /* ---------------- compute scores ---------------- */
     async function computeScores() {
-      clearErr();
-      const week = getWeek();
-      try {
-        const r = await fetch(`/api/scores?week=${encodeURIComponent(week)}`);
-        if (r.ok) { showOk('✅ Scores computed (see leaderboard)'); return; }
-      } catch {}
-      try {
-        const r2 = await fetch(`/api/scores/compute?week=${encodeURIComponent(week)}`);
-        if (r2.ok) { showOk('✅ Scores computed'); return; }
-        showErr('Compute endpoint not available.');
-      } catch (e) { showErr('Compute failed: ' + e.message); }
-    }
+  const week = Number(document.querySelector('#week').value || 1);
+  try {
+    const r = await fetch('/api/scores/compute', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ week })
+    });
+    if (!r.ok) throw new Error('compute_failed');
+    showOk('✅ Scores computed');
+  } catch (e) {
+    showErr('Compute failed: ' + (e.message || 'network'));
+  }
+}
 
-    /* ---------------- NEW: Season Settings logic ---------------- */
+
+    /* ---------------- Season Settings ---------------- */
     async function loadSeason(){
       try {
         const cfg = await fetch('/api/config').then(r=>r.json());
@@ -663,7 +655,6 @@
           body: JSON.stringify(payload)
         });
         showOk('✅ Season settings saved');
-        // reflect week change in header + other panels
         weekInput.value = payload.current_week;
         weekTitle.textContent = payload.current_week;
         if (wkRep) wkRep.textContent = String(payload.current_week);
@@ -686,7 +677,6 @@
       $('#btnLoadPrev').addEventListener('click', loadPreview);
       $('#btnSaveResults').addEventListener('click', saveResults);
 
-      // NEW: Season Settings buttons
       $('#saveSeason').addEventListener('click', saveSeason);
       $('#wkPlus').addEventListener('click', () => bumpWeek(+1));
       $('#wkMinus').addEventListener('click', () => bumpWeek(-1));
@@ -736,7 +726,7 @@
       if (bClr) bClr.addEventListener('click', bulkClear);
       if (bSub) bSub.addEventListener('click', bulkSubmit);
 
-      // Manage Fixtures: row deletes (event delegation)
+      // Manage Fixtures: row deletes
       const mfTbl = document.getElementById('manageFixturesTbl');
       if (mfTbl) mfTbl.addEventListener('click', (e)=>{
         const btn = e.target.closest('button[data-action="del"]'); if (!btn) return;
@@ -751,7 +741,7 @@
       wireEvents();
       if (document.getElementById('addFixturesTbl')) bulkAddRows(10);
       await probeDevMode();
-      await loadSeason();      // <-- NEW: load season settings on boot
+      await loadSeason();
       await renderManage();
       try { await loadPreview(); } catch {}
     })();
@@ -774,23 +764,27 @@
               `Expires: ${new Date(lic.expires_utc).toLocaleDateString()}`;
             toggleAdminButtons(true);
           } else {
-            licText.textContent = `INVALID — ${s.reason}`;
-            toggleAdminButtons(false);
+            // DEMO: always enable admin actions even when license invalid
+            licText.textContent = `INVALID — ${s.reason} (demo mode)`;
+            toggleAdminButtons(true);
           }
         } catch (e) {
-          licText.textContent = 'Error reading license';
-          toggleAdminButtons(false);
+          licText.textContent = 'Error reading license (demo mode)';
+          toggleAdminButtons(true);
         }
       }
 
       function toggleAdminButtons(enabled){
-        ['btnCompute','btnSaveResults','btnBulkSubmit'].forEach(id=>{
+        [
+          'btnCompute','btnSaveResults','btnBulkSubmit','btnBulkAddRows','btnBulkClear',
+          'btnImportCsv','btnImportJson','btnQuickSeed','btnPredsDownload','btnPredsUpload',
+          'btnScoresDownload','btnScoresUpload','btnLoadPrev','btnUseToken'
+        ].forEach(id=>{
           const el = document.getElementById(id);
           if (el) el.disabled = !enabled;
         });
       }
 
-      // ----- PIN Reset -----
       const $ = sel => document.querySelector(sel);
       const msg = $('#pinResetMsg');
       $('#pinResetBtn')?.addEventListener('click', async ()=>{

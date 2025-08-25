@@ -11,7 +11,7 @@
 
     const meta = $('#meta');
     meta.textContent = data.weeks?.length
-      ? `Weeks counted: ${data.weeks.join(', ')}  •  Updated: ${new Date(data.asOf).toLocaleString()}`
+      ? `Weeks counted: ${data.weeks.join(', ')}  Ã¢â‚¬Â¢  Updated: ${new Date(data.asOf).toLocaleString()}`
       : 'No saved weeks yet. Finalize a week on the Scoring page to populate the season table.';
 
     const tbody = $('#seasonTable tbody');
@@ -22,7 +22,7 @@
 
       const byWeek = row.per_week || {};
       const byWeekStr = Object.keys(byWeek).sort((a,b)=>Number(a)-Number(b))
-        .map(w => `W${w}: ${byWeek[w]}`).join('  •  ');
+        .map(w => `W${w}: ${byWeek[w]}`).join('  Ã¢â‚¬Â¢  ');
 
       tr.innerHTML = `
         <td class="mono">${idx + 1}</td>

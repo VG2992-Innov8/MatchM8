@@ -10,82 +10,202 @@
   <div id="hero" data-page="Scoring"></div>
   <script src="/hero.js" defer></script>
 
-  <main class="container narrow">
-    <div class="panel center">
-      <label for="week" class="visually-hidden">Week</label>
-      <input id="week" class="input" type="number" min="1" value="1" style="max-width:120px">
-      <button id="preview" class="btn">Preview</button>
-      <button id="compute" class="btn primary">Calculate & Save</button>
-      <a id="toSeason" class="btn" href="/Part_E_Season.html">Season Leaderboard</a>
+  <main class="container wide">
+    <div class="panel">
+      <div class="center" style="gap:8px; flex-wrap:wrap;">
+        <input id="week" class="input" type="number" min="1" value="1" style="max-width:120px">
+        <button id="btnPreview" class="btn">Preview</button>
+        <button id="btnCompute" class="btn primary">Calculate &amp; Save</button>
+        <button id="btnSeason" class="btn">Season Leaderboard</button>
+      </div>
+      <div id="banner" class="banner ok" style="display:none;margin-top:10px"></div>
+      <div id="err" class="banner error" style="display:none;margin-top:10px"></div>
     </div>
 
-    <div id="ok" class="banner ok" style="display:none">✅ Done.</div>
-    <div id="tableWrap" class="panel" style="display:none">
-      <table class="table" id="scoresTbl">
-        <thead><tr><th>Player</th><th>Week Points</th><th>Season Total</th></tr></thead>
+    <div class="panel">
+      <table class="table" id="tbl">
+        <thead>
+          <tr>
+            <th>Player</th>
+            <th>Week Points</th>
+            <th>Season Total</th>
+          </tr>
+        </thead>
         <tbody></tbody>
       </table>
+      <div id="empty" style="padding:8px;color:var(--muted);display:none">No scores yet.</div>
     </div>
   </main>
 
   <script>
+  const $ = s => document.querySelector(s);
   const qs = new URLSearchParams(location.search);
-  const weekInput = document.getElementById('week');
-  weekInput.value = Number(qs.get('week')) || 1;
+  const weekInput = $('#week');
+  const banner = $('#banner');
+  const err = $('#err');
+  const tbody = $('#tbl tbody');
+  const empty = $('#empty');
 
-  function setSeasonLink(){ document.getElementById('toSeason').href = '/Part_E_Season.html'; }
-  setSeasonLink();
+  let TOTAL_WEEKS = 38;
 
-  function normalizeWeekly(data){
-    // Expected: [{player_id,name,points}] — fallback to empty
-    if (Array.isArray(data)) return data.map(r=>({ name:r.name||'Player', week:r.points||0, total: r.total ?? '' }));
-    if (data && Array.isArray(data.week)) return data.week.map(r=>({ name:r.name, week:r.points, total:r.total ?? '' }));
-    return [];
+  function ok(msg){
+    banner.textContent = msg || 'Done';
+    banner.style.display = 'block';
+    err.style.display = 'none';
+    setTimeout(()=> banner.style.display='none', 1800);
+  }
+  function oops(msg){
+    err.textContent = msg || 'Something went wrong';
+    err.style.display = 'block';
+    banner.style.display = 'none';
+  }
+  function clampWeek(){
+    let w = Number(weekInput.value) || 1;
+    if (w < 1) w = 1;
+    if (w > TOTAL_WEEKS) w = TOTAL_WEEKS;
+    weekInput.value = w;
+    return w;
   }
 
-  async function showTable(rows){
-    // merge season totals if present
+  async function loadConfig(){
     try{
-      const res = await fetch('/data/scores/season-totals.json', {cache:'no-store'});
-      if (res.ok){
-        const totals = await res.json(); // { playerId: { name, total } }
-        rows = rows.map(r=>{
-          const t = Object.values(totals).find(x=>x.name===r.name);
-          return {...r, total: t ? t.total : (r.total ?? '')};
-        });
-      }
-    }catch{}
-    const tbody = document.querySelector('#scoresTbl tbody');
-    tbody.innerHTML = rows.map(r=>`<tr><td>${r.name}</td><td>${r.week ?? ''}</td><td>${r.total ?? ''}</td></tr>`).join('');
-    document.getElementById('tableWrap').style.display = 'block';
+      const cfg = await fetch('/api/config', { cache:'no-store' }).then(r=>r.json());
+      TOTAL_WEEKS = Number(cfg.total_weeks) || 38;
+      const urlW = Number(qs.get('week'));
+      const startW = Number.isFinite(urlW) ? urlW : (Number(cfg.current_week) || 1);
+      weekInput.value = startW;
+      clampWeek();
+    }catch{
+      // defaults
+    }
   }
 
+  /* ---------- Helpers to render ---------- */
+
+  // Build rows from /api/scores/summary payload: { weekly: [...], seasonTotals: [...] }
+  function rowsFromSummary(payload){
+    if (!payload) return [];
+    const weekly = Array.isArray(payload.weekly) ? payload.weekly : [];
+    const totalsArr = Array.isArray(payload.seasonTotals) ? payload.seasonTotals : [];
+    const totalsMap = new Map(
+      totalsArr.map(t => [String(t.player_id), Number(t.totalPoints ?? t.total ?? 0)])
+    );
+    return weekly.map(r => ({
+      name: (r.player ?? r.name ?? r.player_name ?? '').trim(),
+      week: Number(r.weekPoints ?? r.week_points ?? r.week ?? 0),
+      total: totalsMap.get(String(r.player_id)) ?? Number(r.seasonTotal ?? r.total ?? r.weekPoints ?? 0)
+    }));
+  }
+
+  // Fallback normaliser (for legacy /api/scores preview or /compute payloads)
+  function normaliseScores(payload){
+    if (!payload) return [];
+    if (Array.isArray(payload.weekly)) {
+      // compute payload already includes weekly[] and we added seasonTotal per player
+      return payload.weekly.map(r => ({
+        name: r.player || r.name || r.player_name || '',
+        week: Number(r.weekPoints ?? r.week_points ?? r.week ?? 0),
+        total: Number(r.seasonTotal ?? r.total ?? 0),
+      }));
+    }
+    if (Array.isArray(payload)) {
+      return payload.map(r => ({
+        name: r.name || r.player || r.player_name || '',
+        week: Number(r.week_points ?? r.week ?? r.points ?? 0),
+        total: Number(r.season_total ?? r.total ?? r.cumulative ?? r.sum ?? (r.week_points ?? 0)),
+      }));
+    }
+    const rows = payload.table || payload.rows || payload.scores || payload.leaderboard || payload.players || [];
+    return Array.isArray(rows) ? normaliseScores(rows) : [];
+  }
+
+  function renderRows(rows){
+    tbody.innerHTML = '';
+    if (!rows.length) {
+      empty.style.display = 'block';
+      return;
+    }
+    empty.style.display = 'none';
+    rows.forEach(r=>{
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${r.name ?? ''}</td>
+        <td class="right">${Number.isFinite(+r.week) ? +r.week : ''}</td>
+        <td class="right">${Number.isFinite(+r.total) ? +r.total : ''}</td>`;
+      tbody.appendChild(tr);
+    });
+  }
+
+  /* ---------- Preview using /summary (cumulative totals) ---------- */
   async function preview(){
-    const w = Number(weekInput.value)||1;
-    let rows = [];
     try{
-      let res = await fetch(`/api/scores/summary?week=${w}`, {cache:'no-store'});
-      if (!res.ok) res = await fetch(`/api/scores?week=${w}`, {cache:'no-store'});
-      const data = await res.json();
-      rows = normalizeWeekly(data);
-    }catch(e){ console.warn('Preview fallback', e); }
-    await showTable(rows);
+      const w = clampWeek();
+
+      // Prefer the summary join (cumulative)
+      let rows = [];
+      try{
+        const r1 = await fetch(`/api/scores/summary?week=${encodeURIComponent(w)}`, { cache:'no-store' });
+        if (r1.ok) {
+          const data1 = await r1.json().catch(()=> ({}));
+          rows = rowsFromSummary(data1);
+        }
+      }catch{ /* ignore; will fall back */ }
+
+      // Fallback to legacy preview if needed
+      if (!rows.length) {
+        const r2 = await fetch(`/api/scores?week=${encodeURIComponent(w)}`, { cache:'no-store' });
+        if (!r2.ok) throw new Error(`${r2.status} ${r2.statusText}`);
+        const data2 = await r2.json().catch(()=> ({}));
+        rows = normaliseScores(data2);
+      }
+
+      renderRows(rows);
+      if (!rows.length) {
+        empty.innerHTML = 'No scores yet. Has the admin entered results and computed this week?';
+      }
+    }catch(e){
+      oops('Could not load scores: ' + e.message);
+    }
   }
 
+  /* ---------- Compute, then refresh preview ---------- */
   async function compute(){
-    const w = Number(weekInput.value)||1;
-    let res;
     try{
-      res = await fetch(`/api/scores/calc?week=${w}`, {cache:'no-store'});
-      if (!res.ok) res = await fetch(`/api/scores/compute?week=${w}`, {cache:'no-store'});
-      const data = await res.json();
-      await showTable(normalizeWeekly(data));
-      const ok = document.getElementById('ok'); ok.style.display='block'; setTimeout(()=>ok.style.display='none',1500);
-    }catch(e){ console.error(e); }
+      const w = clampWeek();
+
+      // Try POST with query param, then fallback GET, then POST with JSON body
+      let resp = await fetch(`/api/scores/compute?week=${encodeURIComponent(w)}`, { method:'POST' })
+                  .catch(()=>null);
+      if (!resp || !resp.ok) {
+        resp = await fetch(`/api/scores/compute?week=${encodeURIComponent(w)}`).catch(()=>null);
+      }
+      if (!resp || !resp.ok) {
+        resp = await fetch('/api/scores/compute', {
+          method:'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ week: w })
+        }).catch(()=>null);
+      }
+      if (!resp || !resp.ok) throw new Error(resp ? `${resp.status} ${resp.statusText}` : 'network');
+
+      // We *could* display resp.weekly, but we want cumulative → re-run preview()
+      ok(`✅ Scores computed for week ${w}`);
+      await preview();
+    }catch(e){
+      oops('Compute failed: ' + e.message);
+    }
   }
 
-  document.getElementById('preview').addEventListener('click', preview);
-  document.getElementById('compute').addEventListener('click', compute);
+  // Wire-up
+  $('#btnPreview').addEventListener('click', preview);
+  $('#btnCompute').addEventListener('click', compute);
+  $('#btnSeason').addEventListener('click', ()=> location.href='/Part_E_Season.html');
+  weekInput.addEventListener('change', ()=> { clampWeek(); preview(); });
+
+  (async function init(){
+    await loadConfig();
+    await preview();
+  })();
   </script>
 </body>
 </html>
