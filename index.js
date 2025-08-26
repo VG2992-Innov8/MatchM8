@@ -29,7 +29,8 @@ const cors = require('cors');
 const cookieParser = require('cookie-parser');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+app.set('trust proxy', 1);               // ✅ for Railway/any proxy
+const PORT = process.env.PORT || 3000;   // ✅ use platform port if provided
 
 const join = (...p) => path.join(__dirname, ...p);
 const DATA_DIR = join('data');
@@ -263,6 +264,7 @@ if (admin.ok) {
 /* -------------------- Diagnostics -------------------- */
 app.get('/api/__health', (_req, res) => res.json({ ok: true, mounted }));
 app.get('/api/__routes', (_req, res) => res.json(mounted));
+app.get('/healthz', (_req, res) => res.status(200).send('ok')); // ✅ simple health endpoint
 
 // ---- Start reminders scheduler once ----
 const remindersSvc = safeRequire('./services/reminders.js', './services/reminders');
@@ -285,6 +287,6 @@ if (remindersSvc.ok && typeof remindersSvc.mod?.startScheduler === 'function') {
 app.get('/', (_req, res) => res.redirect('/Part_A_PIN.html'));
 
 /* -------------------- Listen -------------------- */
-app.listen(PORT, () => {
-  console.log(`MatchM8 listening on http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {     // ✅ bind to all interfaces for Railway
+  console.log(`MatchM8 listening on port ${PORT}`);
 });
