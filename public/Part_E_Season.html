@@ -5,6 +5,14 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Season — MatchM8</title>
   <link rel="stylesheet" href="/styles.css">
+  <style>
+  /* Only affects Season page if you set data-page="Season" on the hero */
+  #hero[data-page="Season"] #btnPreview,
+  #hero[data-page="Season"] [data-role="preview"] {
+    display: none !important;
+  }
+</style>
+
 </head>
 <body>
   <div id="hero" data-page="Season"></div>
@@ -133,6 +141,17 @@
     a.click();
     URL.revokeObjectURL(a.href);
   }
+
+  // Season page: remove any stray Preview controls injected by shared UI
+  document.addEventListener('DOMContentLoaded', () => {
+    const kill = (sel) => document.querySelectorAll(sel).forEach(el => el.remove());
+    kill('#btnPreview');
+    kill('[data-role="preview"]');
+    // last resort: remove any button whose visible text is "Preview"
+    document.querySelectorAll('button').forEach(btn => {
+      if ((btn.textContent || '').trim().toLowerCase() === 'preview') btn.remove();
+    });
+  });
 
   // Wire up
   $('#btnRefresh').addEventListener('click', loadSeason);

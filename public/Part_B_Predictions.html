@@ -19,7 +19,7 @@
     /* --- Inline Results + Points widget --- */
     .rpw-wrap{display:inline-flex;align-items:center;gap:6px;margin-left:10px;flex:0 0 auto;white-space:nowrap}
     .rpw-wrap .num-box{
-      width:44px !important;           /* defeat any global width */
+      width:44px !important;
       padding:2px 6px;
       box-sizing:border-box;
       text-align:right;
@@ -61,6 +61,7 @@
     let CURRENT_WEEK = 1;
     let LOCK_MINS = 10;
     let DEADLINE_MODE = 'first_kickoff'; // or 'per_match'
+    let SEASON = 2025; // used for localStorage scoping
 
     const qs = new URLSearchParams(location.search);
     const weekInput = document.getElementById('week');
@@ -81,6 +82,17 @@
       const wk = clamp(Number(weekInput.value || 1));
       document.getElementById('weekLabel').textContent = `Week ${wk} of ${TOTAL_WEEKS}`;
     }
+    function storageKey(week){
+      const pid = (localStorage.getItem('player_id') || 'anon').trim() || 'anon';
+      return `preds_s${SEASON}_w${week}_p${pid}`;
+    }
+    function clearPredInputs(){
+      document.querySelectorAll('.line').forEach(line=>{
+        const [h,a]=line.querySelectorAll('input.pred');
+        if (h) h.value = '';
+        if (a) a.value = '';
+      });
+    }
 
     async function loadConfig() {
       try {
@@ -88,6 +100,7 @@
         TOTAL_WEEKS    = Number(cfg.total_weeks || 38);
         LOCK_MINS      = Number(cfg.lock_minutes_before_kickoff ?? cfg.lock_mins ?? 10);
         DEADLINE_MODE  = (String(cfg.deadline_mode||'first_kickoff').toLowerCase() === 'per_match') ? 'per_match' : 'first_kickoff';
+        SEASON         = Number(cfg.season || SEASON);
         const urlWeek  = Number(qs.get('week'));
         CURRENT_WEEK   = Number.isFinite(urlWeek) && urlWeek >= 1 ? urlWeek : Number(cfg.current_week || 1);
       } catch {
@@ -164,14 +177,14 @@
 
     function restoreLocal(){
       const week = Number(weekInput.value);
-      const key = `preds_week_${week}`;
-      const saved = JSON.parse(localStorage.getItem(key) || '[]');
+      clearPredInputs();
+      const saved = JSON.parse(localStorage.getItem(storageKey(week)) || '[]');
       saved.forEach(p=>{
         const line = document.querySelector(`.line[data-id="${p.id}"]`);
         if(!line) return;
         const [h,a]=line.querySelectorAll('input.pred');
-        h.value = (p.home ?? '') === null ? '' : p.home ?? '';
-        a.value = (p.away ?? '') === null ? '' : p.away ?? '';
+        if (h) h.value = (p.home ?? '') === null ? '' : p.home ?? '';
+        if (a) a.value = (p.away ?? '') === null ? '' : p.away ?? '';
       });
     }
 
@@ -234,11 +247,15 @@
       const predictions = Array.from(lines).map(line=>{
         const [h,a]=line.querySelectorAll('input.pred');
         if (h.disabled || a.disabled) return null;
-        return { id: line.dataset.id, home: h.value === '' ? null : Number(h.value), away: a.value === '' ? null : Number(a.value) };
+        return {
+          id: line.dataset.id,
+          home: h.value === '' ? null : Number(h.value),
+          away: a.value === '' ? null : Number(a.value)
+        };
       }).filter(Boolean);
 
-      // Keep a local backup for UX
-      localStorage.setItem(`preds_week_${week}`, JSON.stringify(predictions));
+      // Keep a local backup scoped to season+week+player
+      localStorage.setItem(storageKey(week), JSON.stringify(predictions));
 
       // include player_id (from login) + send header too
       const player_id = (localStorage.getItem('player_id') || '').trim();
@@ -246,7 +263,10 @@
       try{
         await fetch('/api/predictions', {
           method:'POST',
-          headers: { 'Content-Type':'application/json', ...(player_id ? { 'x-player-id': player_id } : {}) },
+          headers: {
+            'Content-Type':'application/json',
+            ...(player_id ? { 'x-player-id': player_id } : {})
+          },
           body: JSON.stringify({ week, player_id, predictions })
         });
       }catch{}

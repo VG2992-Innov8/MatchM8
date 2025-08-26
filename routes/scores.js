@@ -128,7 +128,7 @@ function seasonMapToArray(map) {
     .sort((a, b) => b.totalPoints - a.totalPoints || a.player.localeCompare(b.player));
 }
 
-/* ---------------- Rebuild season totals from weekly files ---------------- */
+/* ---------------- Rebuild season totals from weekly files (idempotent) ---------------- */
 
 function rebuildSeasonTotalsFromWeeks() {
   // Read all week files and aggregate: totals & weeksPlayed per player
@@ -154,9 +154,18 @@ function rebuildSeasonTotalsFromWeeks() {
       }
     }
   } catch (e) {
-    // if weeks dir unreadable, return empty array
-    return [];
+    // ignore — we'll still merge players below
   }
+
+  // ⬇️ Ensure every registered player appears, even with zero totals
+  const playersArr = readJson(PLAYERS, []);
+  for (const p of playersArr) {
+    const pid = String(p.id);
+    if (!totals.has(pid)) {
+      totals.set(pid, { player_id: pid, player: p.name || '', totalPoints: 0, weeksPlayed: 0 });
+    }
+  }
+
   return seasonMapToArray(totals);
 }
 
@@ -255,18 +264,39 @@ router.get('/compute', (req, res) => {
   return res.json({ ok: true, ...payload });
 });
 
-// Summary — always reads from disk (no in-memory), optional ?week=N
+// Summary — reads from disk; rebuilds missing totals; computes weekly on the fly if missing
 router.get('/summary', (req, res) => {
   res.set('Cache-Control', 'no-store, max-age=0');
   try {
     const week = clampInt(req.query.week, 1, null);
 
-    const seasonRaw = readJson(path.join(SCO_DIR, 'season-totals.json'), []);
-    const seasonTotals = seasonMapToArray(seasonToMap(seasonRaw)); // array for UI
+    // Season totals: read or rebuild (and persist) if missing
+    let seasonTotals = readJson(path.join(SCO_DIR, 'season-totals.json'), null);
+    if (!Array.isArray(seasonTotals)) {
+      seasonTotals = rebuildSeasonTotalsFromWeeks();
+      writeJson(path.join(SCO_DIR, 'season-totals.json'), seasonTotals);
+      const legacy = {};
+      for (const t of seasonTotals) legacy[t.player_id] = { name: t.player, total: t.totalPoints, weeks_played: t.weeksPlayed };
+      writeJson(path.join(SCO_DIR, 'season-totals.legacy.json'), legacy);
+    } else {
+      // normalise shape if a legacy map slipped in
+      seasonTotals = seasonMapToArray(seasonToMap(seasonTotals));
+    }
 
+    // Weekly: prefer saved file; if missing, compute on the fly (no write)
     let weekly = null;
     if (week != null) {
-      weekly = readJson(path.join(SCO_WEEKS, `week-${week}.json`), []);
+      weekly = readJson(path.join(SCO_WEEKS, `week-${week}.json`), null);
+      if (!Array.isArray(weekly)) {
+        const predsRaw   = readJson(path.join(PRED_DIR, `week-${week}.json`), null);
+        const resultsRaw = readJson(path.join(RES_DIR,  `week-${week}.json`), null);
+        const predMap    = normalisePredictions(predsRaw);
+        const results    = normaliseResults(resultsRaw);
+        const playersArr = readJson(PLAYERS, []);
+        const playersIdx = new Map(playersArr.map(p => [String(p.id), { name: p.name || '' }]));
+        const table      = computeWeekTable(week, predMap, results, playersIdx);
+        weekly = table.map(r => ({ player_id: r.player_id, player: r.name, weekPoints: r.week_points }));
+      }
     }
 
     const stat = safeStat(path.join(SCO_DIR, 'season-totals.json'));
@@ -293,7 +323,7 @@ function normaliseFixtures(any) {
       const id = String(m.id ?? m.matchId ?? m.code ?? out.size + 1);
       const home = m.home?.name ?? m.home ?? m.homeTeam ?? m.home_team ?? m.homeTeamName ?? 'Home';
       const away = m.away?.name ?? m.away ?? m.awayTeam ?? m.away_team ?? m.awayTeamName ?? 'Away';
-      const ko   = m.kickoffISO ?? m.kickoff ?? m.utcDate ?? null;
+      const ko   = m.kickoffISO ?? m.kickoff_iso ?? m.kickoff ?? m.utcDate ?? null;
       out.set(id, { id, homeTeam: String(home), awayTeam: String(away), kickoffISO: ko });
     }
   } else if (any && typeof any === 'object') {
@@ -301,7 +331,7 @@ function normaliseFixtures(any) {
       const id = String(idRaw);
       const home = m.home?.name ?? m.home ?? m.homeTeam ?? m.home_team ?? m.homeTeamName ?? 'Home';
       const away = m.away?.name ?? m.away ?? m.awayTeam ?? m.away_team ?? m.awayTeamName ?? 'Away';
-      const ko   = m.kickoffISO ?? m.kickoff ?? m.utcDate ?? null;
+      const ko   = m.kickoffISO ?? m.kickoff_iso ?? m.kickoff ?? m.utcDate ?? null;
       out.set(id, { id, homeTeam: String(home), awayTeam: String(away), kickoffISO: ko });
     }
   }

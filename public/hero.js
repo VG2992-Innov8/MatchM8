@@ -126,3 +126,34 @@
       .catch(() => { /* invalid token => keep hidden */ });
   }
 })();
+// Default the Admin week input to current_week (only on Admin-like pages)
+(() => {
+  const page = document.getElementById('hero')?.dataset?.page || '';
+  // Adjust these labels to match your Admin pages' <div id="hero" data-page="...">
+  const ADMIN_PAGES = ['Fixtures', 'Results', 'Admin', 'Locks', 'Admin Fixtures', 'Admin Results'];
+
+  if (!ADMIN_PAGES.includes(page)) return;
+
+  window.addEventListener('DOMContentLoaded', async () => {
+    // don’t override an explicit ?week=... in the URL
+    const qs = new URLSearchParams(location.search);
+    if (qs.has('week')) return;
+
+    const inp = document.getElementById('week');
+    if (!inp) return;
+
+    try {
+      const cfg = await fetch('/api/config',{cache:'no-store'}).then(r=>r.json());
+      inp.value = Number(cfg.current_week || 1);
+      inp.dispatchEvent(new Event('change'));
+    } catch {}
+  
+    const shouldShowPreview = (page !== 'Season'); // hide on leaderboard
+
+if (shouldShowPreview) {
+  // ... create/append the Preview button here ...
+}
+  });
+  
+})();
+

@@ -238,6 +238,13 @@
     const tokenStatus = $('#tokenStatus');
     const wkRep = document.getElementById('wkRep');
     const wkManage = document.getElementById('wkManage');
+    const HAS_WEEK_QUERY = qs.has('week');
+    let CURRENT_SEASON = 2025;
+
+    function fixturesUrl(week){
+      const seasonVal = Number(document.getElementById('season')?.value || CURRENT_SEASON || 2025);
+      return `/data/fixtures/season-${seasonVal}/week-${week}.json?ts=${Date.now()}`;
+    }
 
     function showErr(msg) {
       topError.style.display = 'block';
@@ -259,6 +266,15 @@
       const w = Number(qs.get('week') || 1);
       weekInput.value = w; weekTitle.textContent = w;
       const wStr = String(w);
+      if (weekTitleInline) weekTitleInline.textContent = wStr;
+      if (wkRep) wkRep.textContent = wStr;
+      if (wkManage) wkManage.textContent = wStr;
+    }
+
+    function alignWorkingWeekToSeason() {
+      const cw = Number(document.getElementById('currentWeek')?.value) || 1;
+      weekInput.value = cw; weekTitle.textContent = cw;
+      const wStr = String(cw);
       if (weekTitleInline) weekTitleInline.textContent = wStr;
       if (wkRep) wkRep.textContent = wStr;
       if (wkManage) wkManage.textContent = wStr;
@@ -302,27 +318,46 @@
     const previewStatus = $('#previewStatus');
     const resultsTableBody = $('#resultsTable > tbody');
 
-    async function loadPreview() {
-      clearErr();
-      const week = getWeek();
-      weekTitle.textContent = week;
-      if (weekTitleInline) weekTitleInline.textContent = week;
+   async function loadPreview() {
+  clearErr();
+  const week = getWeek();
+  weekTitle.textContent = week;
+  if (weekTitleInline) weekTitleInline.textContent = week;
 
-      try {
-        const res = await apiFetch(`/api/admin/results?week=${encodeURIComponent(week)}`, { method: 'GET' });
-        const results = (res && res.results) || {};
-        await renderResultsEditable(week, results);
-        previewStatus.textContent = 'Preview loaded';
-      } catch (e) {
-        showErr('Network error while loading preview: ' + e.message);
-      }
-      await renderManage();
+  // Prefer unsaved fixtures in the UI (JSON box, then Add Fixtures rows).
+  const { source, fixtures } =
+  (typeof window.collectUnsavedFixtures === 'function'
+    ? window.collectUnsavedFixtures()
+    : { source: null, fixtures: [] });
+
+
+  try {
+    if (source) {
+      await renderResultsFromFixturesArray(fixtures, {});
+      previewStatus.textContent =
+        source === 'json'
+          ? 'Preview from pasted JSON (not saved)'
+          : 'Preview from Add Fixtures rows (not saved)';
+    } else {
+      // Default: preview the saved week fixtures + any saved results
+      const res = await apiFetch(`/api/admin/results?week=${encodeURIComponent(week)}`, { method: 'GET' });
+      const results = (res && res.results) || {};
+      await renderResultsEditable(week, results);
+      previewStatus.textContent = 'Preview loaded';
     }
+  } catch (e) {
+    showErr('Error while loading preview: ' + e.message);
+  }
+
+  // Keep the Manage Fixtures panel in sync
+  await renderManage();
+}
+
 
     async function renderResultsEditable(week, resultsMap) {
       let fixtures = [];
       try {
-        const fx = await fetch(`/data/fixtures/season-2025/week-${week}.json`, {cache:'no-store'});
+        const fx = await fetch(fixturesUrl(week), {cache:'no-store'});
         if (fx.ok) fixtures = await fx.json();
       } catch {}
 
@@ -356,6 +391,38 @@
         resultsTableBody.appendChild(tr);
       }
     }
+
+    async function renderResultsFromFixturesArray(fixtures, resultsMap = {}) {
+  resultsTableBody.innerHTML = '';
+  if (!fixtures.length) {
+    previewEmpty.style.display = 'block';
+    previewWrap.style.display = 'none';
+    return;
+  }
+  previewEmpty.style.display = 'none';
+  previewWrap.style.display = 'block';
+
+  for (const f of fixtures) {
+    const r = resultsMap[f.id] || {};
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${f.id}</td>
+      <td>${f.home || ''}</td>
+      <td>${f.away || ''}</td>
+      <td class="right">
+        <input class="input" type="number" min="0" step="1"
+               value="${(r.homeGoals ?? '')}" data-id="${f.id}" data-side="home"
+               style="max-width:80px">
+      </td>
+      <td class="right">
+        <input class="input" type="number" min="0" step="1"
+               value="${(r.awayGoals ?? '')}" data-id="${f.id}" data-side="away"
+               style="max-width:80px">
+      </td>
+    `;
+    resultsTableBody.appendChild(tr);
+  }
+}
 
     async function saveResults() {
       clearErr();
@@ -470,12 +537,52 @@
         next.push({ id, home, away, kickoff_iso: toIso(date, time) });
       });
 
+      function collectUnsavedFixtures(){
+  // 1) Check the JSON box first
+  const raw = document.getElementById('jsonBox')?.value.trim();
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      const arr = Array.isArray(parsed) ? parsed : (parsed.fixtures || []);
+      if (Array.isArray(arr) && arr.length) {
+        return { source: 'json', fixtures: arr };
+      }
+    } catch { /* ignore bad JSON for preview */ }
+  }
+
+  // 2) Fall back to Add Fixtures table rows
+  const tbody = document.querySelector('#addFixturesTbl tbody');
+  if (tbody) {
+    const rows = Array.from(tbody.querySelectorAll('tr'));
+    const next = [];
+    const seen = new Set();
+    const toIso = (d,t)=> (d && t) ? new Date(`${d}T${t}`).toISOString() : null;
+
+    rows.forEach(tr=>{
+      const home = tr.querySelector('input[name="home"]')?.value.trim();
+      const away = tr.querySelector('input[name="away"]')?.value.trim();
+      const date = tr.querySelector('input[name="date"]')?.value;
+      const time = tr.querySelector('input[name="time"]')?.value;
+      if (!home || !away) return;
+      let base = `fixture_${slugify(home)}_${slugify(away)}`, id = base, n=1;
+      while (seen.has(id)) { n++; id = `${base}_${n}`; }
+      seen.add(id);
+      next.push({ id, home, away, kickoff_iso: toIso(date, time) });
+    });
+
+    if (next.length) return { source: 'bulk', fixtures: next };
+  }
+
+  // 3) Nothing unsaved found
+  return { source: null, fixtures: [] };
+}
+
       const replace = document.getElementById('replaceMode')?.checked;
 
       let fixtures = [];
       if (!replace) {
         try {
-          const res = await fetch(`/data/fixtures/season-2025/week-${week}.json?ts=${Date.now()}`, { cache:'no-store' });
+          const res = await fetch(fixturesUrl(week), { cache:'no-store' });
           if (res.ok) fixtures = await res.json();
         } catch {}
       }
@@ -506,7 +613,7 @@
     /* ---------------- Manage Fixtures (delete rows) ---------------- */
     async function readWeekFixtures(week) {
       try {
-        const res = await fetch(`/data/fixtures/season-2025/week-${week}.json?ts=${Date.now()}`, {cache:'no-store'});
+        const res = await fetch(fixturesUrl(week), {cache:'no-store'});
         if (res.ok) return await res.json();
       } catch {}
       return [];
@@ -609,31 +716,43 @@
 
     /* ---------------- compute scores ---------------- */
     async function computeScores() {
-  const week = Number(document.querySelector('#week').value || 1);
-  try {
-    const r = await fetch('/api/scores/compute', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ week })
-    });
-    if (!r.ok) throw new Error('compute_failed');
-    showOk('✅ Scores computed');
-  } catch (e) {
-    showErr('Compute failed: ' + (e.message || 'network'));
-  }
-}
-
+      const week = Number(document.querySelector('#week').value || 1);
+      try {
+        const r = await fetch('/api/scores/compute', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ week })
+        });
+        if (!r.ok) throw new Error('compute_failed');
+        showOk('✅ Scores computed');
+      } catch (e) {
+        showErr('Compute failed: ' + (e.message || 'network'));
+      }
+    }
 
     /* ---------------- Season Settings ---------------- */
     async function loadSeason(){
       try {
         const cfg = await fetch('/api/config').then(r=>r.json());
-        $('#season').value       = cfg.season ?? 2025;
-        $('#totalWeeks').value   = cfg.total_weeks ?? 38;
-        $('#currentWeek').value  = cfg.current_week ?? 1;
-        $('#lockMins').value     = cfg.lock_minutes_before_kickoff ?? 10;
-        $('#deadlineMode').value = cfg.deadline_mode || 'first_kickoff';
-        $('#tz').value           = cfg.timezone || 'Australia/Melbourne';
+        // read both snake_case + camelCase for safety
+        const seasonVal = Number(cfg.season ?? 2025);
+        const tw = Number(cfg.total_weeks ?? cfg.totalWeeks ?? 38);
+        const cw = Number(cfg.current_week ?? cfg.currentWeek ?? 1);
+        const lock = Number(cfg.lock_minutes_before_kickoff ?? cfg.lockMinutesBeforeKickoff ?? 10);
+        const mode = cfg.deadline_mode || cfg.deadlineMode || 'first_kickoff';
+        const tz = cfg.timezone || 'Australia/Melbourne';
+
+        $('#season').value       = seasonVal;
+        $('#totalWeeks').value   = tw;
+        $('#currentWeek').value  = cw;
+        $('#lockMins').value     = lock;
+        $('#deadlineMode').value = mode;
+        $('#tz').value           = tz;
+
+        CURRENT_SEASON = seasonVal;
+
+        // Align Working Week to Season week unless the URL explicitly set ?week
+        if (!HAS_WEEK_QUERY) alignWorkingWeekToSeason();
       } catch (e) {
         console.warn('Could not load /api/config', e);
       }
@@ -655,10 +774,15 @@
           body: JSON.stringify(payload)
         });
         showOk('✅ Season settings saved');
+        // keep UI in sync immediately
+        CURRENT_SEASON = payload.season;
         weekInput.value = payload.current_week;
         weekTitle.textContent = payload.current_week;
         if (wkRep) wkRep.textContent = String(payload.current_week);
         if (wkManage) wkManage.textContent = String(payload.current_week);
+        if (weekTitleInline) weekTitleInline.textContent = String(payload.current_week);
+        await renderManage();
+        await loadPreview();
       } catch (e) {
         showErr('Save failed: ' + e.message);
       }
@@ -685,6 +809,7 @@
         weekInput.value = v; weekTitle.textContent = v;
         if (wkRep) wkRep.textContent = String(v);
         if (wkManage) wkManage.textContent = String(v);
+        if (weekTitleInline) weekTitleInline.textContent = String(v);
       });
 
       // CSV fixtures import
@@ -741,7 +866,7 @@
       wireEvents();
       if (document.getElementById('addFixturesTbl')) bulkAddRows(10);
       await probeDevMode();
-      await loadSeason();
+      await loadSeason();               // sets CURRENT_SEASON & aligns working week (if no ?week)
       await renderManage();
       try { await loadPreview(); } catch {}
     })();

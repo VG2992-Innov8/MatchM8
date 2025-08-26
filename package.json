@@ -9,8 +9,11 @@
     "dev": "nodemon --watch . --ext js,json,html --exec node index.js",
     "worker": "node jobs/email-worker.js",
     "cron": "node jobs/cron.js",
-    "factory:reset": "node scripts/factory-reset.js --force",
-    "factory:reset:keep": "node scripts/factory-reset.js --keep-players --force"
+     "reset:factory": "node scripts/factory-reset.js --force",
+    "reset:factory:admin": "node scripts/factory-reset.js --force --keep-admin",
+    "reset:factory:players": "node scripts/factory-reset.js --force --keep-players",
+    "reset:factory:fresh": "node scripts/factory-reset.js --force --reset-config",
+    "reset:factory:full": "node scripts/factory-reset.js --force --reset-config --purge-mail"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.56.0",
