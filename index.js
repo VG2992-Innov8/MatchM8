@@ -284,7 +284,9 @@ if (remindersSvc.ok && typeof remindersSvc.mod?.startScheduler === 'function') {
   });
 
 /* -------------------- Root -------------------- */
-app.get('/', (_req, res) => res.redirect('/Part_A_PIN.html'));
+// Root (new) — return 200 so Railway healthcheck passes
+app.get('/', (_req, res) => res.sendFile(join('public', 'Part_A_PIN.html')));
+
 
 /* -------------------- Listen -------------------- */
 app.listen(PORT, '0.0.0.0', () => {     // ✅ bind to all interfaces for Railway
