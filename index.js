@@ -1,4 +1,4 @@
-// index.js — MatchM8 server (final)
+// index.js — MatchM8 server (final, prod-hardened)
 
 const path = require('path');
 const fs = require('fs');
@@ -20,6 +20,7 @@ if (process.env.ADMIN_TOKEN) {
 if (process.env.LICENSE_PUBKEY_B64) {
   process.env.LICENSE_PUBKEY_B64 = cleanToken(process.env.LICENSE_PUBKEY_B64);
 }
+const APP_MODE = process.env.APP_MODE || 'demo';
 // demo guard: allow running without license in the demo copy
 const SKIP_LICENSE = String(process.env.DEMO_SKIP_LICENSE || '').toLowerCase() === 'true';
 
@@ -27,14 +28,15 @@ const SKIP_LICENSE = String(process.env.DEMO_SKIP_LICENSE || '').toLowerCase() =
 const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
+const { DATA_DIR } = require('./lib/paths');     // <- central data dir (env DATA_DIR or ./data)
 
 const app = express();
-app.set('trust proxy', 1);               // ✅ for Railway/any proxy
-const PORT = process.env.PORT || 3000;   // ✅ use platform port if provided
+app.set('trust proxy', 1);                        // ✅ for Render/Railway/any proxy
+const PORT = process.env.PORT || 3000;            // ✅ use platform port if provided
 
-const join = (...p) => path.join(__dirname, ...p);
-const DATA_DIR = join('data');
-const CONFIG_PATH = join('data', 'config.json');
+const joinRepo = (...p) => path.join(__dirname, ...p);
+const joinData = (...p) => path.join(DATA_DIR, ...p);
+const CONFIG_PATH = joinData('config.json');
 
 // --- config defaults used if data/config.json is missing ---
 const DEFAULT_CONFIG = {
@@ -57,7 +59,7 @@ function readConfig() {
   }
 }
 function writeConfig(cfg) {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch {}
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
 }
 
@@ -123,10 +125,15 @@ app.use(cookieParser());
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false }));
 
-// Static assets
-app.use('/data', express.static(join('data'))); // (disable in prod if you prefer)
-app.use(express.static(join('public')));
-app.use('/ui', express.static(join('ui')));
+// Health (Render/Railway)
+app.get('/health', (_req, res) => res.json({ ok: true, mode: APP_MODE, ts: Date.now() }));
+app.get('/healthz', (_req, res) => res.status(200).send('ok')); // legacy/simple
+
+// Static assets (SAFE): expose only read-only scores + fixtures
+app.use('/data/scores', express.static(joinData('scores')));
+app.use('/data/fixtures', express.static(joinData('fixtures')));
+app.use(express.static(joinRepo('public')));
+app.use('/ui', express.static(joinRepo('ui')));
 
 // Fix old encoded URLs (legacy)
 app.use((req, res, next) => {
@@ -160,8 +167,14 @@ app.post('/api/config', requireAdminToken, (req, res) => {
 
 /* -------------------- Safe require + mount -------------------- */
 function safeRequire(label, p) {
-  try { return { ok: true, mod: require(p) }; }
-  catch (e) { console.warn(`Skipping ${label}:`, e.message); return { ok: false, mod: null, reason: e.message }; }
+  try {
+    const mod = require(p);
+    console.log(`[boot] mounted ${label} at runtime path ${p}`);
+    return { ok: true, mod };
+  } catch (e) {
+    console.warn(`[boot] Skipping ${label}: ${e.message}`);
+    return { ok: false, mod: null, reason: e.message };
+  }
 }
 function mount(label, route, mod) {
   app.use(route, mod);
@@ -180,7 +193,7 @@ if (fixtures.ok) {
     const cfg = readConfig();
     const week = Math.max(1, parseInt(req.query.week, 10) || 1);
     const season = cfg.season || 2025;
-    const fpath = join('data', 'fixtures', `season-${season}`, `week-${week}.json`);
+    const fpath = path.join(DATA_DIR, 'fixtures', `season-${season}`, `week-${week}.json`);
     try {
       const txt = fs.readFileSync(fpath, 'utf8');
       const arr = JSON.parse(txt);
@@ -262,33 +275,21 @@ if (admin.ok) {
 }
 
 /* -------------------- Diagnostics -------------------- */
-app.get('/api/__health', (_req, res) => res.json({ ok: true, mounted }));
+app.get('/api/__health', (_req, res) => res.json({ ok: true, mounted, mode: APP_MODE, dataDir: DATA_DIR }));
 app.get('/api/__routes', (_req, res) => res.json(mounted));
-app.get('/healthz', (_req, res) => res.status(200).send('ok')); // ✅ simple health endpoint
-
-// ---- Start reminders scheduler once ----
-const remindersSvc = safeRequire('./services/reminders.js', './services/reminders');
-if (remindersSvc.ok && typeof remindersSvc.mod?.startScheduler === 'function') {
-  if (!global.__REMINDERS_STARTED__) {
-    remindersSvc.mod.startScheduler();
-    global.__REMINDERS_STARTED__ = true;
-  }
-} else {
-  console.warn('Reminders service not started:', remindersSvc.reason || 'no startScheduler()');
-}
 
 /* -------------------- Map legacy UI pages -------------------- */
 ['Part_A_PIN.html', 'Part_B_Predictions.html', 'Part_D_Scoring.html', 'Part_E_Season.html']
   .forEach(page => {
-    app.get('/' + page, (_req, res) => res.sendFile(join('public', page)));
+    app.get('/' + page, (_req, res) => res.sendFile(joinRepo('public', page)));
   });
 
 /* -------------------- Root -------------------- */
-// Root (new) — return 200 so Railway healthcheck passes
-app.get('/', (_req, res) => res.sendFile(join('public', 'Part_A_PIN.html')));
-
+// Root (new) — return 200 so platform healthcheck passes
+app.get('/', (_req, res) => res.sendFile(joinRepo('public', 'Part_A_PIN.html')));
 
 /* -------------------- Listen -------------------- */
-app.listen(PORT, '0.0.0.0', () => {     // ✅ bind to all interfaces for Railway
-  console.log(`MatchM8 listening on port ${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`MatchM8 listening on port ${PORT} (mode=${APP_MODE})`);
+  console.log(`DATA_DIR = ${DATA_DIR}`);
 });

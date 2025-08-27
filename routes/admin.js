@@ -1,45 +1,66 @@
 // routes/admin.js — cleaned, secured, and extended with Players CRUD
+
 const express = require('express');
+const router = express.Router();
+
 const path = require('path');
-const fs = require('fs'); // sync FS
-const fsp = require('fs/promises'); // async FS
+const fs = require('fs');                 // sync FS
+const fsp = require('fs/promises');       // async FS
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
-const { writeJsonAtomic } = require('../utils/atomicJson');
 
-const router = express.Router();
+const { DATA_DIR } = require('../lib/paths');            // central data dir
+let { writeJsonAtomic } = require('../utils/atomicJson'); // optional helper
+if (typeof writeJsonAtomic !== 'function') {
+  // safe fallback if utils/atomicJson is absent
+  writeJsonAtomic = async (p, obj) => fsp.writeFile(p, JSON.stringify(obj, null, 2));
+}
+
+const APP_MODE = process.env.APP_MODE || 'demo';
+const ADMIN_TOKEN = (process.env.ADMIN_TOKEN || '').trim();
+
 router.use(express.json()); // parse JSON bodies for all routes in this file
 
-/* ===== ADMIN TOKEN GUARD (header-only) ===== */
-function cleanToken(s = '') {
-  return String(s)
-    .replace(/\r/g, '')
-    .replace(/\s+#.*$/, '')
-    .replace(/^\s*['"]|['"]\s*$/g, '')
-    .trim();
+/* ---------- timing-safe token compare ---------- */
+function safeEqual(a = '', b = '') {
+  const ab = Buffer.from(String(a));
+  const bb = Buffer.from(String(b));
+  return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
 }
-const ADMIN_TOKEN = cleanToken(process.env.ADMIN_TOKEN || '');
+
+/* ---------- single ADMIN TOKEN guard (header: x-admin-token) ---------- */
+/* In DEMO, allow through when no ADMIN_TOKEN is configured; in PROD, block. */
 router.use((req, res, next) => {
-  if (!ADMIN_TOKEN) return next(); // dev mode if unset
-  const t = cleanToken(req.get('x-admin-token') || '');
-  if (t === ADMIN_TOKEN) return next();
-  return res.status(401).json({ ok: false, error: 'unauthorized' });
+  if (!ADMIN_TOKEN) {
+    if (APP_MODE === 'demo') return next();
+    return res.status(403).json({ ok: false, error: 'admin disabled (missing ADMIN_TOKEN)' });
+  }
+  const t = (req.get('x-admin-token') || '').trim();
+  if (safeEqual(t, ADMIN_TOKEN)) return next();
+  return res.status(403).json({ ok: false, error: 'forbidden' });
 });
 
-/* ---------- paths & helpers ---------- */
-const DATA_DIR = path.join(__dirname, '..', 'data');
+/* ================================================
+   Helpers (paths, IO, CSV)
+   ================================================ */
 const PLAYERS_PATH = path.join(DATA_DIR, 'players.json');
 
-async function ensureDir(p) {
-  await fsp.mkdir(p, { recursive: true }).catch(() => {});
+async function ensureDirFor(filePath) {
+  await fsp.mkdir(path.dirname(filePath), { recursive: true }).catch(() => {});
 }
 
-async function loadPlayers() {
-  try { return JSON.parse(await fsp.readFile(PLAYERS_PATH, 'utf8')); }
-  catch { return []; }
+async function readPlayers() {
+  try {
+    const txt = await fsp.readFile(PLAYERS_PATH, 'utf8');
+    const arr = JSON.parse(txt);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
 }
-async function savePlayers(players) {
-  await ensureDir(path.dirname(PLAYERS_PATH));
+
+async function writePlayers(players) {
+  await ensureDirFor(PLAYERS_PATH);
   await writeJsonAtomic(PLAYERS_PATH, players);
 }
 
@@ -121,99 +142,115 @@ function parseCsvTolerant(text) {
   return { header, rows };
 }
 
-/* ========================= Players ========================= */
+/* ================================================
+   Players API (mounted under /api/admin)
+   ================================================ */
 
-// Safe list (no PINs)
+// GET /players — safe list (no PINs)
 router.get('/players', async (_req, res) => {
   try {
-    const players = await loadPlayers();
-    res.json(players.map(p => ({ id: p.id, name: p.name, email: p.email || null, has_pin: !!p.pin_hash, pin_updated_at: p.pin_updated_at || null })));
-  } catch (e) { res.status(500).json({ error: 'server_error' }); }
+    const players = await readPlayers();
+    res.json(players.map(p => ({
+      id: p.id,
+      name: p.name,
+      email: p.email || null,
+      has_pin: !!p.pin_hash,
+      pin_updated_at: p.pin_updated_at || null
+    })));
+  } catch { res.status(500).json({ error: 'server_error' }); }
 });
 
-// Count only
+// GET /players/count — total number (return a number)
 router.get('/players/count', async (_req, res) => {
   try {
-    const players = await loadPlayers();
-    res.json({ count: players.length });
-  } catch (e) { res.status(500).json({ error: 'server_error' }); }
+    const players = await readPlayers();
+    res.json(players.length);
+  } catch { res.status(500).json({ error: 'server_error' }); }
 });
 
-// Add a player
+// POST /players — { name, email?, pin? } (pin optional; hashed)
 router.post('/players', async (req, res) => {
   try {
     const { name, email = '', pin } = req.body || {};
     if (!name || typeof name !== 'string' || !name.trim()) {
       return res.status(400).json({ error: 'name_required' });
     }
-    const players = await loadPlayers();
+    const players = await readPlayers();
     const id = (crypto.randomUUID && crypto.randomUUID()) || `p-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`;
-    const rec = { id, name: name.trim(), email: String(email || '') };
+    const rec = { id, name: name.trim(), email: String(email || '') || undefined };
     if (pin && String(pin).length >= 4) {
       rec.pin_hash = await bcrypt.hash(String(pin), 10);
       rec.pin_updated_at = new Date().toISOString();
     }
     players.push(rec);
-    await savePlayers(players);
-    return res.json({ ok: true, player: { id: rec.id, name: rec.name, email: rec.email, has_pin: !!rec.pin_hash, pin_updated_at: rec.pin_updated_at || null } });
-  } catch (e) { res.status(500).json({ error: 'server_error' }); }
+    await writePlayers(players);
+    return res.json({
+      ok: true,
+      player: { id: rec.id, name: rec.name, email: rec.email || '', has_pin: !!rec.pin_hash, pin_updated_at: rec.pin_updated_at || null }
+    });
+  } catch { res.status(500).json({ error: 'server_error' }); }
 });
 
-// Update a player (name/email and/or set/clear PIN)
+// PUT /players/:id — { name?, email?, new_pin?, clear_pin? }
 router.put('/players/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { name, email, new_pin, clear_pin } = req.body || {};
-    const players = await loadPlayers();
+    const players = await readPlayers();
     const idx = players.findIndex(p => String(p.id) === String(id));
     if (idx < 0) return res.status(404).json({ error: 'player_not_found' });
-    if (name != null) players[idx].name = String(name);
-    if (email != null) players[idx].email = String(email);
+
+    if (name != null) players[idx].name = String(name).trim();
+    if (email != null) {
+      const e = String(email).trim();
+      if (e) players[idx].email = e; else delete players[idx].email;
+    }
     if (clear_pin) {
       delete players[idx].pin_hash;
-      delete players[idx].pin;
       players[idx].pin_updated_at = new Date().toISOString();
     } else if (new_pin != null) {
       if (String(new_pin).length < 4) return res.status(400).json({ error: 'PIN must be ≥ 4 digits' });
       players[idx].pin_hash = await bcrypt.hash(String(new_pin), 10);
-      delete players[idx].pin;
       players[idx].pin_updated_at = new Date().toISOString();
     }
-    await savePlayers(players);
+
+    await writePlayers(players);
     const p = players[idx];
-    return res.json({ ok: true, player: { id: p.id, name: p.name, email: p.email || '', has_pin: !!p.pin_hash, pin_updated_at: p.pin_updated_at || null } });
-  } catch (e) { res.status(500).json({ error: 'server_error' }); }
+    return res.json({
+      ok: true,
+      player: { id: p.id, name: p.name, email: p.email || '', has_pin: !!p.pin_hash, pin_updated_at: p.pin_updated_at || null }
+    });
+  } catch { res.status(500).json({ error: 'server_error' }); }
 });
 
-// Delete a player
+// DELETE /players/:id
 router.delete('/players/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const players = await loadPlayers();
+    const players = await readPlayers();
     const idx = players.findIndex(p => String(p.id) === String(id));
     if (idx < 0) return res.status(404).json({ error: 'player_not_found' });
-    const removed = players.splice(idx, 1)[0];
-    await savePlayers(players);
+    const [removed] = players.splice(idx, 1);
+    await writePlayers(players);
     return res.json({ ok: true, removed: { id: removed.id, name: removed.name, email: removed.email || '' } });
-  } catch (e) { res.status(500).json({ error: 'server_error' }); }
+  } catch { res.status(500).json({ error: 'server_error' }); }
 });
 
-// Reset/set PIN by id or name (kept from your draft)
+// POST /players/pin/reset — { player_id?, name?, new_pin }
 router.post('/players/pin/reset', async (req, res) => {
   try {
     const { player_id, name, new_pin } = req.body || {};
     if (!new_pin || String(new_pin).length < 4) return res.status(400).json({ error: 'PIN must be >= 4 digits' });
-    const players = await loadPlayers();
+    const players = await readPlayers();
     const idx = players.findIndex(p =>
       (player_id && String(p.id) === String(player_id)) || (name && p.name === name)
     );
     if (idx < 0) return res.status(404).json({ error: 'player_not_found' });
     players[idx].pin_hash = await bcrypt.hash(String(new_pin), 10);
-    delete players[idx].pin;
     players[idx].pin_updated_at = new Date().toISOString();
-    await savePlayers(players);
+    await writePlayers(players);
     res.json({ ok: true, id: players[idx].id, name: players[idx].name });
-  } catch (e) { res.status(500).json({ error: 'server_error' }); }
+  } catch { res.status(500).json({ error: 'server_error' }); }
 });
 
 /* ========================= Fixtures & Results ========================= */
@@ -255,33 +292,23 @@ router.get('/results', (req, res) => {
 
 /* ========================= Predictions CSV ========================= */
 
-router.post('/predictions/upload', express.json(), async (req, res) => {
+router.post('/predictions/upload', async (req, res) => {
   try {
     const { week, csv } = req.body || {};
     const wk = parseInt(week, 10);
-    if (!Number.isFinite(wk) || wk < 1) {
-      return res.status(400).json({ error: 'bad_week', detail: String(week) });
-    }
-    if (!csv || typeof csv !== 'string') {
-      return res.status(400).json({ error: 'missing_csv' });
-    }
+    if (!Number.isFinite(wk) || wk < 1) return res.status(400).json({ error: 'bad_week', detail: String(week) });
+    if (!csv || typeof csv !== 'string') return res.status(400).json({ error: 'missing_csv' });
 
     const { header, rows } = parseCsvTolerant(csv);
-    // Only require player_id and predictions; timestamps optional
     const need = ['player_id', 'predictions'];
     const missing = need.filter(k => !header.includes(k));
-    if (missing.length) {
-      return res.status(400).json({ error: 'bad_header', missing });
-    }
+    if (missing.length) return res.status(400).json({ error: 'bad_header', missing });
 
-    // Load existing (map expected). If an older file is an array, convert to a map.
     const fpath = path.join(DATA_DIR, 'predictions', `week-${wk}.json`);
     let existing = readJsonSync(fpath, {});
     if (Array.isArray(existing)) {
       const conv = {};
-      for (const r of existing) {
-        if (r && r.player_id) conv[String(r.player_id)] = r;
-      }
+      for (const r of existing) if (r && r.player_id) conv[String(r.player_id)] = r;
       existing = conv;
     } else if (!existing || typeof existing !== 'object') {
       existing = {};
@@ -292,15 +319,12 @@ router.post('/predictions/upload', express.json(), async (req, res) => {
       if (!r.player_id) continue;
 
       let predsArr;
-      try {
-        predsArr = JSON.parse(r.predictions);
-      } catch {
-        const fixed = r.predictions.replace(/\"\"/g, '"'); // CSV doubled quotes -> JSON quotes
+      try { predsArr = JSON.parse(r.predictions); }
+      catch {
+        const fixed = r.predictions.replace(/\"\"/g, '"');
         predsArr = JSON.parse(fixed);
       }
-      if (!Array.isArray(predsArr)) {
-        return res.status(400).json({ error: 'predictions_not_array', row: r });
-      }
+      if (!Array.isArray(predsArr)) return res.status(400).json({ error: 'predictions_not_array', row: r });
 
       const key = String(r.player_id);
       existing[key] = {
@@ -328,7 +352,6 @@ router.get('/predictions/download', (req, res) => {
     const p = path.join(DATA_DIR, 'predictions', `week-${week}.json`);
     let data = readJsonSync(p, {});
 
-    // If someone previously wrote an array, convert on the fly so the CSV is sane
     if (Array.isArray(data)) {
       const m = {};
       for (const r of data) if (r && r.player_id) m[String(r.player_id)] = r;
@@ -405,7 +428,7 @@ router.get('/scores/download', (_req, res) => {
 
 router.get('/players/download', async (_req, res) => {
   try {
-    const arr = await loadPlayers();
+    const arr = await readPlayers();
     const rows = arr.map(pl => ({
       id: pl.id, name: pl.name || '', email: pl.email || '', has_pin: !!pl.pin_hash, pin_updated_at: pl.pin_updated_at || ''
     })); // do NOT export PINs
@@ -432,7 +455,7 @@ router.post('/players/upload', async (req, res) => {
       out.push(rec);
     }
 
-    await ensureDir(path.dirname(PLAYERS_PATH));
+    await ensureDirFor(PLAYERS_PATH);
     await writeJsonAtomic(PLAYERS_PATH, out);
     return res.json({ ok: true, imported: out.length, hashed: out.filter(p => p.pin_hash).length });
   } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }

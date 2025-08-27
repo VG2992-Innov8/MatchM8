@@ -2,7 +2,9 @@
 const express = require('express');
 const path = require('path');
 const fsp = require('fs/promises');
-const { computeLockStatus } = require('../lib/locks'); // locking
+
+// ADD: TZ-aware lock helpers
+const { isLocked, earliestKickoff, kickoffToLock } = require('../lib/time');
 
 const router = express.Router();
 router.use(express.json());
@@ -131,6 +133,17 @@ router.post('/', async (req, res) => {
   const w = parseInt(week, 10);
 
   if (!Number.isFinite(w) || w <= 0) return res.status(400).json({ error: 'week required' });
+
+  // ---- TZ-aware locking (first_kickoff) ----
+const cfg = normalizeConfig(await loadConfig());
+if (cfg.deadline_mode === 'first_kickoff') {
+  const firstKO = earliestKickoff(cfg.season, w); // reads fixtures/season-<season>/week-<w>.json
+  if (firstKO && isLocked(firstKO, cfg)) {
+    const lockUtc = kickoffToLock(firstKO, cfg.lock_minutes_before_kickoff, cfg.timezone);
+    return res.status(423).json({ ok: false, error: 'locked', lock_utc: lockUtc });
+  }
+}
+// -------------------------------------------
 
   // find a player id (body → header → fallback)
   player_id = String(player_id || req.get('x-player-id') || '').trim();
