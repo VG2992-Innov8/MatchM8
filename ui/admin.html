@@ -18,6 +18,7 @@
       width: 100%; min-width: 0; font-size: 18px; padding: 12px 14px; box-sizing: border-box;
     }
     .input { font-size: 16px; padding: 10px 12px; }
+    .badge { display:inline-block; padding:2px 8px; border-radius:999px; background:var(--border); font-size:12px; }
   </style>
 </head>
 <body>
@@ -113,6 +114,39 @@
         <span id="playersSummary" style="margin-left:8px; opacity:.8;"></span>
       </div>
     </div>
+
+    <!-- PLAYERS MANAGEMENT -->
+    <section class="panel" id="playersPanel">
+      <div class="center" style="justify-content:space-between; width:100%;">
+        <h2 style="margin:0">Players <small id="playersCount" style="font-weight:400"></small></h2>
+        <div class="row" style="gap:8px; flex-wrap:wrap;">
+          <button class="btn" id="btnPlayersRefresh" type="button">Refresh</button>
+          <button class="btn primary" id="btnPlayersAdd" type="button">Add Player</button>
+          <button class="btn" id="btnPlayersDownload" type="button">Download CSV</button>
+          <button class="btn" id="btnPlayersUploadToggle" type="button">Upload CSV</button>
+        </div>
+      </div>
+
+      <div id="playersUploadWrap" style="display:none; margin-top:10px;">
+        <label>Paste Players CSV (id,name,email,pin?)</label>
+        <textarea id="csvPlayers" class="input" rows="4" placeholder='id,name,email,pin\n,,,,'></textarea>
+        <div class="center" style="margin-top:8px; gap:8px;">
+          <button id="btnPlayersUploadDo" class="btn" type="button">Upload</button>
+          <button id="btnPlayersUploadCancel" class="btn" type="button">Cancel</button>
+        </div>
+      </div>
+
+      <div id="playersBanner" class="banner ok" style="display:none; margin-top:8px;"></div>
+
+      <table class="table" id="playersTbl" style="margin-top:10px;">
+        <thead>
+          <tr>
+            <th>Name</th><th>Email</th><th>PIN</th><th class="right">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="playersTbody"></tbody>
+      </table>
+    </section>
 
     <!-- RESULTS -->
     <div class="panel" id="previewCard">
@@ -318,41 +352,39 @@
     const previewStatus = $('#previewStatus');
     const resultsTableBody = $('#resultsTable > tbody');
 
-   async function loadPreview() {
-  clearErr();
-  const week = getWeek();
-  weekTitle.textContent = week;
-  if (weekTitleInline) weekTitleInline.textContent = week;
+    async function loadPreview() {
+      clearErr();
+      const week = getWeek();
+      weekTitle.textContent = week;
+      if (weekTitleInline) weekTitleInline.textContent = week;
 
-  // Prefer unsaved fixtures in the UI (JSON box, then Add Fixtures rows).
-  const { source, fixtures } =
-  (typeof window.collectUnsavedFixtures === 'function'
-    ? window.collectUnsavedFixtures()
-    : { source: null, fixtures: [] });
+      // Prefer unsaved fixtures in the UI (JSON box, then Add Fixtures rows).
+      const { source, fixtures } =
+      (typeof window.collectUnsavedFixtures === 'function'
+        ? window.collectUnsavedFixtures()
+        : { source: null, fixtures: [] });
 
+      try {
+        if (source) {
+          await renderResultsFromFixturesArray(fixtures, {});
+          previewStatus.textContent =
+            source === 'json'
+              ? 'Preview from pasted JSON (not saved)'
+              : 'Preview from Add Fixtures rows (not saved)';
+        } else {
+          // Default: preview the saved week fixtures + any saved results
+          const res = await apiFetch(`/api/admin/results?week=${encodeURIComponent(week)}`, { method: 'GET' });
+          const results = (res && res.results) || {};
+          await renderResultsEditable(week, results);
+          previewStatus.textContent = 'Preview loaded';
+        }
+      } catch (e) {
+        showErr('Error while loading preview: ' + e.message);
+      }
 
-  try {
-    if (source) {
-      await renderResultsFromFixturesArray(fixtures, {});
-      previewStatus.textContent =
-        source === 'json'
-          ? 'Preview from pasted JSON (not saved)'
-          : 'Preview from Add Fixtures rows (not saved)';
-    } else {
-      // Default: preview the saved week fixtures + any saved results
-      const res = await apiFetch(`/api/admin/results?week=${encodeURIComponent(week)}`, { method: 'GET' });
-      const results = (res && res.results) || {};
-      await renderResultsEditable(week, results);
-      previewStatus.textContent = 'Preview loaded';
+      // Keep the Manage Fixtures panel in sync
+      await renderManage();
     }
-  } catch (e) {
-    showErr('Error while loading preview: ' + e.message);
-  }
-
-  // Keep the Manage Fixtures panel in sync
-  await renderManage();
-}
-
 
     async function renderResultsEditable(week, resultsMap) {
       let fixtures = [];
@@ -393,19 +425,19 @@
     }
 
     async function renderResultsFromFixturesArray(fixtures, resultsMap = {}) {
-  resultsTableBody.innerHTML = '';
-  if (!fixtures.length) {
-    previewEmpty.style.display = 'block';
-    previewWrap.style.display = 'none';
-    return;
-  }
-  previewEmpty.style.display = 'none';
-  previewWrap.style.display = 'block';
+      resultsTableBody.innerHTML = '';
+      if (!fixtures.length) {
+        previewEmpty.style.display = 'block';
+        previewWrap.style.display = 'none';
+        return;
+      }
+      previewEmpty.style.display = 'none';
+      previewWrap.style.display = 'block';
 
-  for (const f of fixtures) {
-    const r = resultsMap[f.id] || {};
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
+      for (const f of fixtures) {
+        const r = resultsMap[f.id] || {};
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
       <td>${f.id}</td>
       <td>${f.home || ''}</td>
       <td>${f.away || ''}</td>
@@ -420,9 +452,9 @@
                style="max-width:80px">
       </td>
     `;
-    resultsTableBody.appendChild(tr);
-  }
-}
+        resultsTableBody.appendChild(tr);
+      }
+    }
 
     async function saveResults() {
       clearErr();
@@ -538,44 +570,44 @@
       });
 
       function collectUnsavedFixtures(){
-  // 1) Check the JSON box first
-  const raw = document.getElementById('jsonBox')?.value.trim();
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw);
-      const arr = Array.isArray(parsed) ? parsed : (parsed.fixtures || []);
-      if (Array.isArray(arr) && arr.length) {
-        return { source: 'json', fixtures: arr };
+        // 1) Check the JSON box first
+        const raw = document.getElementById('jsonBox')?.value.trim();
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw);
+            const arr = Array.isArray(parsed) ? parsed : (parsed.fixtures || []);
+            if (Array.isArray(arr) && arr.length) {
+              return { source: 'json', fixtures: arr };
+            }
+          } catch { /* ignore bad JSON for preview */ }
+        }
+
+        // 2) Fall back to Add Fixtures table rows
+        const tbody = document.querySelector('#addFixturesTbl tbody');
+        if (tbody) {
+          const rows = Array.from(tbody.querySelectorAll('tr'));
+          const next = [];
+          const seen = new Set();
+          const toIso = (d,t)=> (d && t) ? new Date(`${d}T${t}`).toISOString() : null;
+
+          rows.forEach(tr=>{
+            const home = tr.querySelector('input[name="home"]')?.value.trim();
+            const away = tr.querySelector('input[name="away"]')?.value.trim();
+            const date = tr.querySelector('input[name="date"]')?.value;
+            const time = tr.querySelector('input[name="time"]')?.value;
+            if (!home || !away) return;
+            let base = `fixture_${slugify(home)}_${slugify(away)}`, id = base, n=1;
+            while (seen.has(id)) { n++; id = `${base}_${n}`; }
+            seen.add(id);
+            next.push({ id, home, away, kickoff_iso: toIso(date, time) });
+          });
+
+          if (next.length) return { source: 'bulk', fixtures: next };
+        }
+
+        // 3) Nothing unsaved found
+        return { source: null, fixtures: [] };
       }
-    } catch { /* ignore bad JSON for preview */ }
-  }
-
-  // 2) Fall back to Add Fixtures table rows
-  const tbody = document.querySelector('#addFixturesTbl tbody');
-  if (tbody) {
-    const rows = Array.from(tbody.querySelectorAll('tr'));
-    const next = [];
-    const seen = new Set();
-    const toIso = (d,t)=> (d && t) ? new Date(`${d}T${t}`).toISOString() : null;
-
-    rows.forEach(tr=>{
-      const home = tr.querySelector('input[name="home"]')?.value.trim();
-      const away = tr.querySelector('input[name="away"]')?.value.trim();
-      const date = tr.querySelector('input[name="date"]')?.value;
-      const time = tr.querySelector('input[name="time"]')?.value;
-      if (!home || !away) return;
-      let base = `fixture_${slugify(home)}_${slugify(away)}`, id = base, n=1;
-      while (seen.has(id)) { n++; id = `${base}_${n}`; }
-      seen.add(id);
-      next.push({ id, home, away, kickoff_iso: toIso(date, time) });
-    });
-
-    if (next.length) return { source: 'bulk', fixtures: next };
-  }
-
-  // 3) Nothing unsaved found
-  return { source: null, fixtures: [] };
-}
 
       const replace = document.getElementById('replaceMode')?.checked;
 
@@ -620,7 +652,7 @@
     }
 
     function fmtDT(iso){
-      if(!iso) return ['',''];
+      if(!iso) return ['', ''];
       const d = new Date(iso);
       return [ d.toLocaleDateString(), d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) ];
     }
@@ -712,6 +744,101 @@
         });
         showOk('✅ Season scores uploaded');
       } catch (e) { showErr('Upload failed: ' + e.message); }
+    }
+
+    /* ---------------- Players panel logic ---------------- */
+    async function refreshPlayers(){
+      const tbody = document.getElementById('playersTbody');
+      const countEl = document.getElementById('playersCount');
+      if (!tbody || !countEl) return; // panel not on page
+      try {
+        const list = await apiFetch('/api/admin/players', { method:'GET' });
+        const withPins = list.filter(p=>p.has_pin).length;
+        countEl.textContent = `— ${list.length} total · ${withPins} with PIN`;
+        tbody.innerHTML = '';
+        for (const p of list) {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td><input class="input" data-k="name" data-id="${p.id}" value="${escapeHtml(p.name||'')}"></td>
+            <td><input class="input" data-k="email" data-id="${p.id}" value="${escapeHtml(p.email||'')}"></td>
+            <td>
+              <span class="badge" data-pin-state="${p.has_pin ? 'set' : 'none'}">${p.has_pin ? 'set' : 'none'}</span>
+              <button class="btn" data-action="setpin" data-id="${p.id}" type="button">Set</button>
+              <button class="btn" data-action="clearpin" data-id="${p.id}" type="button" ${p.has_pin?'' :'disabled'}>Clear</button>
+            </td>
+            <td class="right">
+              <button class="btn" data-action="save" data-id="${p.id}" type="button">Save</button>
+              <button class="btn" data-action="del" data-id="${p.id}" type="button">Delete</button>
+            </td>`;
+          tbody.appendChild(tr);
+        }
+      } catch(e){ showErr('Players load failed: ' + e.message); }
+    }
+
+    function escapeHtml(s){
+      return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    }
+
+    async function addPlayer(){
+      const name = prompt('Player name?'); if (!name) return;
+      const email = prompt('Email (optional)?') || '';
+      const pin = prompt('PIN (optional, 4+ digits)?') || '';
+      try {
+        await apiFetch('/api/admin/players', { method:'POST', body: JSON.stringify({ name, email, pin }) });
+        showPanelOk('playersBanner', `Added ${name}`);
+        await refreshPlayers();
+      } catch(e){ showErr('Add failed: ' + e.message); }
+    }
+
+    function showPanelOk(id, msg){ const el = document.getElementById(id); if(!el) return; el.textContent = msg; el.className = 'banner ok'; el.style.display='block'; setTimeout(()=> el.style.display='none', 1600); }
+
+    async function onPlayersTableClick(e){
+      const btn = e.target.closest('button[data-action]'); if (!btn) return;
+      const id = btn.dataset.id; const act = btn.dataset.action;
+      try {
+        if (act === 'save') {
+          const name = document.querySelector(`input[data-id="${id}"][data-k="name"]`)?.value || '';
+          const email = document.querySelector(`input[data-id="${id}"][data-k="email"]`)?.value || '';
+          await apiFetch(`/api/admin/players/${encodeURIComponent(id)}`, { method:'PUT', body: JSON.stringify({ name, email }) });
+          showPanelOk('playersBanner', 'Saved');
+        } else if (act === 'del') {
+          if (!confirm('Delete this player?')) return;
+          await apiFetch(`/api/admin/players/${encodeURIComponent(id)}`, { method:'DELETE' });
+          showPanelOk('playersBanner', 'Deleted');
+        } else if (act === 'setpin') {
+          const pin = prompt('New PIN (4+ digits)?');
+          if (!pin || String(pin).length < 4) return alert('PIN must be at least 4 digits.');
+          await apiFetch(`/api/admin/players/${encodeURIComponent(id)}`, { method:'PUT', body: JSON.stringify({ new_pin: pin }) });
+          showPanelOk('playersBanner', 'PIN set');
+        } else if (act === 'clearpin') {
+          if (!confirm('Clear PIN for this player?')) return;
+          await apiFetch(`/api/admin/players/${encodeURIComponent(id)}`, { method:'PUT', body: JSON.stringify({ clear_pin: true }) });
+          showPanelOk('playersBanner', 'PIN cleared');
+        }
+      } catch(e){ showErr('Action failed: ' + e.message); }
+      await refreshPlayers();
+    }
+
+    async function downloadPlayersCsv(){
+      try {
+        const text = await apiFetch('/api/admin/players/download', { method:'GET' });
+        const blob = new Blob([text], { type: 'text/csv' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'players.csv'; a.click();
+        URL.revokeObjectURL(a.href);
+      } catch(e){ showErr('Players CSV download failed: ' + e.message); }
+    }
+
+    async function uploadPlayersCsv(){
+      const text = document.getElementById('csvPlayers')?.value || '';
+      if (!text.trim()) return showErr('Paste CSV into the box first.');
+      try {
+        await apiFetch('/api/admin/players/upload', { method:'POST', body: JSON.stringify({ csv: text }) });
+        showPanelOk('playersBanner', 'Players CSV uploaded');
+        document.getElementById('playersUploadWrap').style.display = 'none';
+        await refreshPlayers();
+      } catch(e){ showErr('Players CSV upload failed: ' + e.message); }
     }
 
     /* ---------------- compute scores ---------------- */
@@ -812,6 +939,25 @@
         if (weekTitleInline) weekTitleInline.textContent = String(v);
       });
 
+      // Players panel
+      const pTbl = document.getElementById('playersTbl');
+      if (pTbl) pTbl.addEventListener('click', onPlayersTableClick);
+      const btnPR = document.getElementById('btnPlayersRefresh');
+      if (btnPR) btnPR.addEventListener('click', refreshPlayers);
+      const btnPA = document.getElementById('btnPlayersAdd');
+      if (btnPA) btnPA.addEventListener('click', addPlayer);
+      const btnPD = document.getElementById('btnPlayersDownload');
+      if (btnPD) btnPD.addEventListener('click', downloadPlayersCsv);
+      const btnPUT = document.getElementById('btnPlayersUploadToggle');
+      if (btnPUT) btnPUT.addEventListener('click', ()=>{
+        const w = document.getElementById('playersUploadWrap');
+        if (w) w.style.display = (w.style.display==='none' || !w.style.display) ? 'block' : 'none';
+      });
+      const btnPU = document.getElementById('btnPlayersUploadDo');
+      if (btnPU) btnPU.addEventListener('click', uploadPlayersCsv);
+      const btnPUC = document.getElementById('btnPlayersUploadCancel');
+      if (btnPUC) btnPUC.addEventListener('click', ()=>{ const w=document.getElementById('playersUploadWrap'); if(w) w.style.display='none'; });
+
       // CSV fixtures import
       $('#btnImportCsv').addEventListener('click', async () => {
         const f = $('#fileCsv').files[0]; if (!f) return showErr('Choose a CSV file first.');
@@ -869,6 +1015,8 @@
       await loadSeason();               // sets CURRENT_SEASON & aligns working week (if no ?week)
       await renderManage();
       try { await loadPreview(); } catch {}
+      // Players
+      try { await refreshPlayers(); } catch {}
     })();
   </script>
 
@@ -903,7 +1051,8 @@
         [
           'btnCompute','btnSaveResults','btnBulkSubmit','btnBulkAddRows','btnBulkClear',
           'btnImportCsv','btnImportJson','btnQuickSeed','btnPredsDownload','btnPredsUpload',
-          'btnScoresDownload','btnScoresUpload','btnLoadPrev','btnUseToken'
+          'btnScoresDownload','btnScoresUpload','btnLoadPrev','btnUseToken',
+          'btnPlayersRefresh','btnPlayersAdd','btnPlayersDownload','btnPlayersUploadToggle','btnPlayersUploadDo'
         ].forEach(id=>{
           const el = document.getElementById(id);
           if (el) el.disabled = !enabled;

@@ -1,9 +1,10 @@
-// routes/admin.js Ã¢â‚¬" cleaned & secured
+// routes/admin.js — cleaned, secured, and extended with Players CRUD
 const express = require('express');
 const path = require('path');
-const fs = require('fs');              // sync FS
-const fsp = require('fs/promises');    // async FS
+const fs = require('fs'); // sync FS
+const fsp = require('fs/promises'); // async FS
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const { writeJsonAtomic } = require('../utils/atomicJson');
 
 const router = express.Router();
@@ -29,11 +30,18 @@ router.use((req, res, next) => {
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const PLAYERS_PATH = path.join(DATA_DIR, 'players.json');
 
+async function ensureDir(p) {
+  await fsp.mkdir(p, { recursive: true }).catch(() => {});
+}
+
 async function loadPlayers() {
   try { return JSON.parse(await fsp.readFile(PLAYERS_PATH, 'utf8')); }
   catch { return []; }
 }
-async function savePlayers(players) { await writeJsonAtomic(PLAYERS_PATH, players); }
+async function savePlayers(players) {
+  await ensureDir(path.dirname(PLAYERS_PATH));
+  await writeJsonAtomic(PLAYERS_PATH, players);
+}
 
 function readJsonSync(p, fb = null) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); }
@@ -47,7 +55,7 @@ function writeJsonSync(p, obj) {
 function toCSV(rows) {
   if (!rows.length) return '';
   const headers = Object.keys(rows[0]);
-  const esc = v => String(v ?? '').replace(/"/g, '""').replace(/\r?\n/g, ' ');
+  const esc = v => String(v ?? '').replace(/\"/g, '""').replace(/\r?\n/g, ' ');
   return [headers.join(','), ...rows.map(r => headers.map(h => `"${esc(r[h])}"`).join(','))].join('\n');
 }
 
@@ -78,67 +86,6 @@ function parseCsv(text) {
   return out;
 }
 
-/* ---------- Players (safe list + admin reset) ---------- */
-router.get('/players', async (_req, res) => {
-  try {
-    const players = await loadPlayers();
-    res.json(players.map(p => ({ id: p.id, name: p.name, email: p.email || null, has_pin: !!p.pin_hash })));
-  } catch (e) { res.status(500).json({ error: 'server_error' }); }
-});
-
-router.post('/players/pin/reset', async (req, res) => {
-  try {
-    const { player_id, name, new_pin } = req.body || {};
-    if (!new_pin || String(new_pin).length < 4) return res.status(400).json({ error: 'PIN must be >= 4 digits' });
-    const players = await loadPlayers();
-    const idx = players.findIndex(p =>
-      (player_id && String(p.id) === String(player_id)) || (name && p.name === name)
-    );
-    if (idx < 0) return res.status(404).json({ error: 'player_not_found' });
-    players[idx].pin_hash = await bcrypt.hash(String(new_pin), 10);
-    delete players[idx].pin;
-    players[idx].pin_updated_at = new Date().toISOString();
-    await savePlayers(players);
-    res.json({ ok: true, id: players[idx].id, name: players[idx].name });
-  } catch (e) { res.status(500).json({ error: 'server_error' }); }
-});
-
-/* ---------- 1) Import fixtures ---------- */
-router.post('/fixtures/import', (req, res) => {
-  try {
-    const { week, fixtures } = req.body || {};
-    if (!week || !Array.isArray(fixtures)) return res.status(400).json({ ok: false, error: 'week and fixtures[] required' });
-    const fixturesPath = path.join(DATA_DIR, 'fixtures', 'season-2025', `week-${week}.json`);
-    fs.mkdirSync(path.dirname(fixturesPath), { recursive: true });
-    fs.writeFileSync(fixturesPath, JSON.stringify(fixtures, null, 2), 'utf8');
-    return res.json({ ok: true, saved: fixtures.length });
-  } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
-});
-
-/* ---------- 2) Save results ---------- */
-router.post('/results', (req, res) => {
-  try {
-    const { week, results } = req.body || {};
-    if (!week || typeof results !== 'object') return res.status(400).json({ ok: false, error: 'week and results{} required' });
-    const p = path.join(DATA_DIR, 'results', `week-${week}.json`);
-    fs.mkdirSync(path.dirname(p), { recursive: true });
-    fs.writeFileSync(p, JSON.stringify(results, null, 2), 'utf8');
-    return res.json({ ok: true });
-  } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
-});
-
-/* ---------- 3) Get results ---------- */
-router.get('/results', (req, res) => {
-  try {
-    const { week } = req.query;
-    if (!week) return res.status(400).json({ ok: false, error: 'week required' });
-    const p = path.join(DATA_DIR, 'results', `week-${week}.json`);
-    const obj = readJsonSync(p, {});
-    return res.json({ ok: true, results: obj });
-  } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
-});
-
-/* ---------- 4) Upload predictions CSV ---------- */
 // tolerant CSV (handles quotes, doubled quotes, BOM, empty cells); header is lowercased
 function parseCsvTolerant(text) {
   text = String(text || '').replace(/^\uFEFF/, '');
@@ -173,6 +120,140 @@ function parseCsvTolerant(text) {
   });
   return { header, rows };
 }
+
+/* ========================= Players ========================= */
+
+// Safe list (no PINs)
+router.get('/players', async (_req, res) => {
+  try {
+    const players = await loadPlayers();
+    res.json(players.map(p => ({ id: p.id, name: p.name, email: p.email || null, has_pin: !!p.pin_hash, pin_updated_at: p.pin_updated_at || null })));
+  } catch (e) { res.status(500).json({ error: 'server_error' }); }
+});
+
+// Count only
+router.get('/players/count', async (_req, res) => {
+  try {
+    const players = await loadPlayers();
+    res.json({ count: players.length });
+  } catch (e) { res.status(500).json({ error: 'server_error' }); }
+});
+
+// Add a player
+router.post('/players', async (req, res) => {
+  try {
+    const { name, email = '', pin } = req.body || {};
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({ error: 'name_required' });
+    }
+    const players = await loadPlayers();
+    const id = (crypto.randomUUID && crypto.randomUUID()) || `p-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`;
+    const rec = { id, name: name.trim(), email: String(email || '') };
+    if (pin && String(pin).length >= 4) {
+      rec.pin_hash = await bcrypt.hash(String(pin), 10);
+      rec.pin_updated_at = new Date().toISOString();
+    }
+    players.push(rec);
+    await savePlayers(players);
+    return res.json({ ok: true, player: { id: rec.id, name: rec.name, email: rec.email, has_pin: !!rec.pin_hash, pin_updated_at: rec.pin_updated_at || null } });
+  } catch (e) { res.status(500).json({ error: 'server_error' }); }
+});
+
+// Update a player (name/email and/or set/clear PIN)
+router.put('/players/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, email, new_pin, clear_pin } = req.body || {};
+    const players = await loadPlayers();
+    const idx = players.findIndex(p => String(p.id) === String(id));
+    if (idx < 0) return res.status(404).json({ error: 'player_not_found' });
+    if (name != null) players[idx].name = String(name);
+    if (email != null) players[idx].email = String(email);
+    if (clear_pin) {
+      delete players[idx].pin_hash;
+      delete players[idx].pin;
+      players[idx].pin_updated_at = new Date().toISOString();
+    } else if (new_pin != null) {
+      if (String(new_pin).length < 4) return res.status(400).json({ error: 'PIN must be ≥ 4 digits' });
+      players[idx].pin_hash = await bcrypt.hash(String(new_pin), 10);
+      delete players[idx].pin;
+      players[idx].pin_updated_at = new Date().toISOString();
+    }
+    await savePlayers(players);
+    const p = players[idx];
+    return res.json({ ok: true, player: { id: p.id, name: p.name, email: p.email || '', has_pin: !!p.pin_hash, pin_updated_at: p.pin_updated_at || null } });
+  } catch (e) { res.status(500).json({ error: 'server_error' }); }
+});
+
+// Delete a player
+router.delete('/players/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const players = await loadPlayers();
+    const idx = players.findIndex(p => String(p.id) === String(id));
+    if (idx < 0) return res.status(404).json({ error: 'player_not_found' });
+    const removed = players.splice(idx, 1)[0];
+    await savePlayers(players);
+    return res.json({ ok: true, removed: { id: removed.id, name: removed.name, email: removed.email || '' } });
+  } catch (e) { res.status(500).json({ error: 'server_error' }); }
+});
+
+// Reset/set PIN by id or name (kept from your draft)
+router.post('/players/pin/reset', async (req, res) => {
+  try {
+    const { player_id, name, new_pin } = req.body || {};
+    if (!new_pin || String(new_pin).length < 4) return res.status(400).json({ error: 'PIN must be >= 4 digits' });
+    const players = await loadPlayers();
+    const idx = players.findIndex(p =>
+      (player_id && String(p.id) === String(player_id)) || (name && p.name === name)
+    );
+    if (idx < 0) return res.status(404).json({ error: 'player_not_found' });
+    players[idx].pin_hash = await bcrypt.hash(String(new_pin), 10);
+    delete players[idx].pin;
+    players[idx].pin_updated_at = new Date().toISOString();
+    await savePlayers(players);
+    res.json({ ok: true, id: players[idx].id, name: players[idx].name });
+  } catch (e) { res.status(500).json({ error: 'server_error' }); }
+});
+
+/* ========================= Fixtures & Results ========================= */
+
+// 1) Import fixtures
+router.post('/fixtures/import', (req, res) => {
+  try {
+    const { week, fixtures } = req.body || {};
+    if (!week || !Array.isArray(fixtures)) return res.status(400).json({ ok: false, error: 'week and fixtures[] required' });
+    const fixturesPath = path.join(DATA_DIR, 'fixtures', 'season-2025', `week-${week}.json`);
+    fs.mkdirSync(path.dirname(fixturesPath), { recursive: true });
+    fs.writeFileSync(fixturesPath, JSON.stringify(fixtures, null, 2), 'utf8');
+    return res.json({ ok: true, saved: fixtures.length });
+  } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// 2) Save results
+router.post('/results', (req, res) => {
+  try {
+    const { week, results } = req.body || {};
+    if (!week || typeof results !== 'object') return res.status(400).json({ ok: false, error: 'week and results{} required' });
+    const p = path.join(DATA_DIR, 'results', `week-${week}.json`);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, JSON.stringify(results, null, 2), 'utf8');
+    return res.json({ ok: true });
+  } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// 3) Get results
+router.get('/results', (req, res) => {
+  try {
+    const { week } = req.query;
+    if (!week) return res.status(400).json({ ok: false, error: 'week required' });
+    const p = path.join(DATA_DIR, 'results', `week-${week}.json`);
+    const obj = readJsonSync(p, {});
+    return res.json({ ok: true, results: obj });
+  } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+});
+
+/* ========================= Predictions CSV ========================= */
 
 router.post('/predictions/upload', express.json(), async (req, res) => {
   try {
@@ -214,7 +295,7 @@ router.post('/predictions/upload', express.json(), async (req, res) => {
       try {
         predsArr = JSON.parse(r.predictions);
       } catch {
-        const fixed = r.predictions.replace(/""/g, '"'); // CSV doubled quotes -> JSON quotes
+        const fixed = r.predictions.replace(/\"\"/g, '"'); // CSV doubled quotes -> JSON quotes
         predsArr = JSON.parse(fixed);
       }
       if (!Array.isArray(predsArr)) {
@@ -239,7 +320,6 @@ router.post('/predictions/upload', express.json(), async (req, res) => {
   }
 });
 
-/* ---------- 5) Download predictions CSV ---------- */
 router.get('/predictions/download', (req, res) => {
   try {
     const { week } = req.query;
@@ -272,7 +352,8 @@ router.get('/predictions/download', (req, res) => {
   } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
 });
 
-/* ---------- 6) Upload scores CSV ---------- */
+/* ========================= Scores CSV ========================= */
+
 router.post('/scores/upload', (req, res) => {
   try {
     const { csv } = req.body || {};
@@ -298,7 +379,6 @@ router.post('/scores/upload', (req, res) => {
   } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
 });
 
-/* ---------- 7) Download scores CSV ---------- */
 router.get('/scores/download', (_req, res) => {
   try {
     const p = path.join(DATA_DIR, 'scores', `season-totals.json`);
@@ -321,7 +401,8 @@ router.get('/scores/download', (_req, res) => {
   } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
 });
 
-/* ---------- 8) Players export/import ---------- */
+/* ========================= Players export/import ========================= */
+
 router.get('/players/download', async (_req, res) => {
   try {
     const arr = await loadPlayers();
@@ -346,19 +427,21 @@ router.post('/players/upload', async (req, res) => {
       const rec = { id: r.id, name: r.name || '', email: r.email || '' };
       if (r.pin && String(r.pin).length >= 4) {
         rec.pin_hash = await bcrypt.hash(String(r.pin), 10);
+        rec.pin_updated_at = new Date().toISOString();
       }
       out.push(rec);
     }
 
+    await ensureDir(path.dirname(PLAYERS_PATH));
     await writeJsonAtomic(PLAYERS_PATH, out);
     return res.json({ ok: true, imported: out.length, hashed: out.filter(p => p.pin_hash).length });
   } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
 });
 
-/* ---------- 9) Admin health ---------- */
+/* ========================= Admin health & maintenance ========================= */
+
 router.get('/health', (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 
-/* ---------- 10) Delete week data ---------- */
 router.post('/wipe/week', (req, res) => {
   try {
     const { week } = req.body || {};
