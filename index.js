@@ -85,23 +85,34 @@ const license = require('./lib/license');
 // only log license status if we're not skipping in demo
 license.loadAndValidate().then(s => { if (!SKIP_LICENSE) console.log('License:', s.reason); });
 
+// dev-only toggle: enabled by env + runtime flag
+const DEV_LICENSE_ROUTE_OK = String(process.env.ALLOW_DEV_LICENSE_ROUTE || '').toLowerCase() === 'true';
+global.__MM8_DEV_LICENSE_BYPASS = global.__MM8_DEV_LICENSE_BYPASS || false;
+
+function isLicenseBypassed() {
+  return SKIP_LICENSE || (DEV_LICENSE_ROUTE_OK && global.__MM8_DEV_LICENSE_BYPASS);
+}
+
+
 // Expose license status for UI
 app.get('/api/license/status', (_req, res) => res.json(license.getStatus()));
 
 // PUBLIC admin-auth endpoints (allowed even if license invalid)
-const ADMIN_PUBLIC = new Set(['/login', '/bootstrap', '/state', '/health']);
+const ADMIN_PUBLIC = new Set([
+  '/login', '/bootstrap', '/state', '/health',
+  '/license', '/license/status',
+  // dev test endpoints (still token-guarded, but bypass license gate)
+  '/license/dev-test', '/license/dev-test/status',
+  '/license/dev-test/enable', '/license/dev-test/disable',
+]);
 
 if (SKIP_LICENSE) {
   console.log('DEMO_SKIP_LICENSE=true — bypassing license checks for /api/admin and /api/scores');
 }
 
-// Gate /api/admin by license (NOT by admin token here; token is enforced inside the admin routers)
-app.use('/api/admin', (req, res, next) => {
-  // allow public admin endpoints through this gate
-  if (ADMIN_PUBLIC.has(req.path)) return next();
-  // demo bypass: skip license check entirely
-  if (SKIP_LICENSE) return next();
-  // otherwise license must be valid
+// /api/scores gate
+app.use('/api/scores', (req, res, next) => {
+  if (isLicenseBypassed()) return next();
   const s = license.getStatus();
   if (!s.ok) return res.status(403).json({ error: 'License invalid: ' + s.reason });
   next();
@@ -247,6 +258,11 @@ if (players.ok) {
 const adminAuth = require('./routes/admin_auth');
 app.use('/api/admin', adminAuth);
 mounted.push({ label: './routes/admin_auth.js', route: '/api/admin' });
+
+// ---- Admin dev license toggles (token-guarded; license gate bypassed by ADMIN_PUBLIC) ----
+const adminLicenseDevRt = require('./routes/admin-license-dev');
+app.use('/api/admin/license/dev-test', adminLicenseDevRt);
+mounted.push({ label: './routes/admin-license-dev.js', route: '/api/admin/license/dev-test' });
 
 // ---- Admin routes (guarded; token checks inside route impl) ----
 const admin = safeRequire('./routes/admin.js', './routes/admin');
