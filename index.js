@@ -20,13 +20,14 @@ if (process.env.ADMIN_TOKEN) {
 if (process.env.LICENSE_PUBKEY_B64) {
   process.env.LICENSE_PUBKEY_B64 = cleanToken(process.env.LICENSE_PUBKEY_B64);
 }
-const APP_MODE = process.env.APP_MODE || 'demo';
-// demo guard: allow running without license when explicitly set
-const SKIP_LICENSE = String(process.env.DEMO_SKIP_LICENSE || '').toLowerCase() === 'true';
 
-// ------------- App bootstrap -------------
+// 🔒 Lock to prod
+const APP_MODE = 'prod';
+
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const cookieParser = require('cookie-parser');
 const crypto = require('crypto');
 const { DATA_DIR } = require('./lib/paths');     // <- central data dir (env DATA_DIR or ./data)
@@ -82,51 +83,22 @@ function requireAdminToken(req, res, next) {
 
 // --- License wiring ---
 const license = require('./lib/license');
-// only log license status if we're not skipping in demo
-license.loadAndValidate().then(s => { if (!SKIP_LICENSE) console.log('License:', s.reason); });
+license.loadAndValidate().then(s => {
+  console.log('License:', s.reason);
+});
 
-// dev-only toggle: enabled by env + runtime flag
-const DEV_LICENSE_ROUTE_OK = String(process.env.ALLOW_DEV_LICENSE_ROUTE || '').toLowerCase() === 'true';
-global.__MM8_DEV_LICENSE_BYPASS = global.__MM8_DEV_LICENSE_BYPASS || false;
-
-function isLicenseBypassed() {
-  return SKIP_LICENSE || (DEV_LICENSE_ROUTE_OK && global.__MM8_DEV_LICENSE_BYPASS);
+// Simple license gate middleware (no demo/bypass)
+function requireValidLicense(req, res, next) {
+  const s = license.getStatus();
+  if (!s.ok) return res.status(403).json({ error: 'License invalid: ' + s.reason });
+  next();
 }
-
 
 // Expose license status for UI
 app.get('/api/license/status', (_req, res) => res.json(license.getStatus()));
 
-// PUBLIC admin-auth endpoints (allowed even if license invalid)
-const ADMIN_PUBLIC = new Set([
-  '/login', '/bootstrap', '/state', '/health',
-  '/license', '/license/status',
-  // dev test endpoints (still token-guarded, but bypass license gate)
-  '/license/dev-test', '/license/dev-test/status',
-  '/license/dev-test/enable', '/license/dev-test/disable',
-]);
+// -------------------- Global middleware --------------------
 
-if (SKIP_LICENSE) {
-  console.log('DEMO_SKIP_LICENSE=true — bypassing license checks for /api/admin and /api/scores');
-}
-
-// /api/scores gate
-app.use('/api/scores', (req, res, next) => {
-  if (isLicenseBypassed()) return next();
-  const s = license.getStatus();
-  if (!s.ok) return res.status(403).json({ error: 'License invalid: ' + s.reason });
-  next();
-});
-
-// Require license for scores (unless demo bypass)
-app.use('/api/scores', (req, res, next) => {
-  if (SKIP_LICENSE) return next();
-  const s = license.getStatus();
-  if (!s.ok) return res.status(403).json({ error: 'License invalid: ' + s.reason });
-  next();
-});
-
-/* -------------------- Global middleware -------------------- */
 // CORS allowlist via env: CORS_ORIGIN="http://localhost:3000,https://your.site"
 const ALLOW = (process.env.CORS_ORIGIN || '')
   .split(',').map(s => s.trim()).filter(Boolean);
@@ -139,6 +111,13 @@ if (ALLOW.length) {
 } else {
   app.use(cors());
 }
+
+// Security headers
+app.use(helmet());
+
+// Light rate-limit on admin API surface
+const adminLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200 });
+app.use('/api/admin', adminLimiter);
 
 app.use(cookieParser());
 app.use(express.json({ limit: '1mb' }));
@@ -233,11 +212,13 @@ if (predictions.ok) {
   mount('./routes/predictions.js', '/predictions', predictions.mod);
 }
 
-// Scores
+// Scores — license-gated
 const scores = safeRequire('./routes/scores.js', './routes/scores');
 if (scores.ok) {
-  mount('./routes/scores.js', '/api/scores', scores.mod);
-  mount('./routes/scores.js', '/scores', scores.mod);
+  app.use('/api/scores', requireValidLicense, scores.mod);
+  app.use('/scores', requireValidLicense, scores.mod);
+  mounted.push({ label: './routes/scores.js', route: '/api/scores' });
+  mounted.push({ label: './routes/scores.js', route: '/scores' });
 }
 
 // Auth
@@ -253,16 +234,39 @@ if (players.ok) {
   mount('./routes/players.js', '/api/players', players.mod);
   mount('./routes/players.js', '/players', players.mod);
 }
+// --- ADD THIS BLOCK: public admin license endpoints (token-only gate) ---
+app.post('/api/admin/license', requireAdminToken, express.json(), async (req, res) => {
+  try {
+    const token = String(req.body?.license || '').trim();
+    if (!token) return res.status(400).json({ ok:false, error:'missing license' });
 
-// ---- Admin auth (mounted BEFORE other /api/admin routes; allowed by ADMIN_PUBLIC whitelist) ----
+    // persist license token into config.json
+    const prev = readConfig();
+    const next = { ...prev, license: { token, appliedAt: new Date().toISOString() } };
+    writeConfig(next);
+
+    // re-validate after writing
+    const stat = await license.loadAndValidate().catch(e => ({ ok:false, reason: String(e) }));
+    const s = license.getStatus();
+    return res.json({ ok: !!s.ok, status: s, note: stat?.reason || undefined });
+  } catch (e) {
+    return res.status(500).json({ ok:false, error: String(e) });
+  }
+});
+
+app.get('/api/admin/license/status', requireAdminToken, (_req, res) => {
+  return res.json(license.getStatus());
+});
+// --- END ADD ---
+
+
+// ---- Admin auth (mounted BEFORE other /api/admin routes) ----
 const adminAuth = require('./routes/admin_auth');
 app.use('/api/admin', adminAuth);
 mounted.push({ label: './routes/admin_auth.js', route: '/api/admin' });
 
-// ---- Admin dev license toggles (token-guarded; license gate bypassed by ADMIN_PUBLIC) ----
-const adminLicenseDevRt = require('./routes/admin-license-dev');
-app.use('/api/admin/license/dev-test', adminLicenseDevRt);
-mounted.push({ label: './routes/admin-license-dev.js', route: '/api/admin/license/dev-test' });
+// ❌ Removed: Admin dev license toggles (no dev/bypass in prod)
+// (was: ./routes/admin-license-dev.js)
 
 // ---- Admin routes (guarded; token checks inside route impl) ----
 const admin = safeRequire('./routes/admin.js', './routes/admin');
@@ -270,17 +274,11 @@ if (admin.ok) {
   mount('./routes/admin.js', '/api/admin', admin.mod);
 }
 
-// ---- Locks route (license-gated unless demo bypass) ----
+// ---- Locks route — license-gated ----
 {
   const locksRt = safeRequire('./routes/locks.js', './routes/locks');
   if (locksRt.ok) {
-    const locksGate = (req, res, next) => {
-      if (SKIP_LICENSE) return next();
-      const s = license.getStatus();
-      if (!s.ok) return res.status(403).json({ error: 'License invalid: ' + s.reason });
-      next();
-    };
-    app.use('/api/locks', locksGate, locksRt.mod);
+    app.use('/api/locks', requireValidLicense, locksRt.mod);
     mounted.push({ label: './routes/locks.js', route: '/api/locks' });
   } else {
     console.warn('Skipping ./routes/locks.js:', locksRt.reason || 'failed to load');

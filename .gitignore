@@ -15,3 +15,5 @@ data/fixtures/
 data/results/
 data/predictions/
 data/scores/weeks/
+/data
+/data/**
