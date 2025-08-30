@@ -209,6 +209,27 @@
   }
   $('#btnSignup').addEventListener('click', selfSignup);
   $('#suPin').addEventListener('keydown', e=>{ if(e.key==='Enter') selfSignup(); });
+
+  /* ---- Clear "New user" fields when returning to Home ----
+     Clears the Full name + Choose a PIN inputs on:
+     - initial load,
+     - browser back/forward cache restores,
+     - tab returning to visible.
+  */
+  (function(){
+    function resetSignupFields(){
+      const nameEl = $('#suName');
+      const pinEl  = $('#suPin');
+      if (nameEl) nameEl.value = '';
+      if (pinEl)  pinEl.value  = '';
+      const msg = $('#suMsg'); if (msg) msg.textContent = '';
+    }
+    document.addEventListener('DOMContentLoaded', resetSignupFields);
+    window.addEventListener('pageshow', resetSignupFields);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') resetSignupFields();
+    });
+  })();
   </script>
 </body>
 </html>

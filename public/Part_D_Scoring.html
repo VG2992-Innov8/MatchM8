@@ -90,6 +90,7 @@
     const totalsMap = new Map(
       totalsArr.map(t => [String(t.player_id), Number(t.totalPoints ?? t.total ?? 0)])
     );
+    // keep weekly order (week points desc), but season total comes from totalsMap
     return weekly.map(r => ({
       name: (r.player ?? r.name ?? r.player_name ?? '').trim(),
       week: Number(r.weekPoints ?? r.week_points ?? r.week ?? 0),

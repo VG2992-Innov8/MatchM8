@@ -1,11 +1,10 @@
-// index.js — MatchM8 server (final)
+// index.js — MatchM8 server (prod-ready with ephemeral fallback + seeding)
 
 const path = require('path');
 const fs = require('fs');
 
 // ------------- Load & sanitize environment -------------
-const envPath = path.join(__dirname, '.env');
-require('dotenv').config({ path: envPath, override: true });
+require('dotenv').config({ path: path.join(__dirname, '.env'), override: true });
 
 function cleanToken(s = '') {
   return String(s)
@@ -14,26 +13,62 @@ function cleanToken(s = '') {
     .replace(/^\s*['"]|['"]\s*$/g, '')
     .trim();
 }
-if (process.env.ADMIN_TOKEN) {
-  process.env.ADMIN_TOKEN = cleanToken(process.env.ADMIN_TOKEN);
-}
-if (process.env.LICENSE_PUBKEY_B64) {
-  process.env.LICENSE_PUBKEY_B64 = cleanToken(process.env.LICENSE_PUBKEY_B64);
-}
-// demo guard: allow running without license in the demo copy
-const SKIP_LICENSE = String(process.env.DEMO_SKIP_LICENSE || '').toLowerCase() === 'true';
+if (process.env.ADMIN_TOKEN) process.env.ADMIN_TOKEN = cleanToken(process.env.ADMIN_TOKEN);
+if (process.env.LICENSE_PUBKEY_B64) process.env.LICENSE_PUBKEY_B64 = cleanToken(process.env.LICENSE_PUBKEY_B64);
 
-// ------------- App bootstrap -------------
+// If DATA_DIR not provided (e.g., Render Free), default to /tmp (ephemeral) so writes succeed.
+// On Starter w/ disk, set DATA_DIR=/data in the Render env and this will be used instead.
+if (!process.env.DATA_DIR) {
+  const fallback = process.env.RENDER ? '/tmp/matchm8-data' : path.join(__dirname, 'data');
+  process.env.DATA_DIR = fallback;
+  console.log(`[boot] DATA_DIR not set; using ${fallback} ${process.env.RENDER ? '(ephemeral)' : ''}`);
+}
+
+// 🔒 Lock to prod
+const APP_MODE = 'prod';
+
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const cookieParser = require('cookie-parser');
+const crypto = require('crypto');
+const { DATA_DIR } = require('./lib/paths'); // central data dir (reads env DATA_DIR or ./data)
+
+// Ensure data dir exists + common subdirs; optionally seed demo content once.
+function ensureDataDirsAndSeed() {
+  const subdirs = [
+    '.', 'fixtures', 'results', 'predictions',
+    path.join('scores', 'weeks'), 'scores'
+  ];
+  for (const rel of subdirs) {
+    try { fs.mkdirSync(path.join(DATA_DIR, rel), { recursive: true }); } catch {}
+  }
+
+  const seedDir = path.join(__dirname, 'data', '_seed');
+  const seededMarker = path.join(DATA_DIR, '.seeded');
+
+  try {
+    const already = fs.existsSync(seededMarker);
+    const hasSeed = fs.existsSync(seedDir);
+    if (!already && hasSeed) {
+      fs.cpSync(seedDir, DATA_DIR, { recursive: true, force: false, errorOnExist: false });
+      fs.writeFileSync(seededMarker, new Date().toISOString());
+      console.log(`[boot] Seeded demo data from ${seedDir} -> ${DATA_DIR}`);
+    }
+  } catch (e) {
+    console.warn('[boot] Seeding skipped:', e.message);
+  }
+}
+ensureDataDirsAndSeed();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+app.set('trust proxy', 1); // ✅ for Render/Railway/any proxy
+const PORT = process.env.PORT || 3000; // ✅ use platform port if provided
 
-const join = (...p) => path.join(__dirname, ...p);
-const DATA_DIR = join('data');
-const CONFIG_PATH = join('data', 'config.json');
+const joinRepo = (...p) => path.join(__dirname, ...p);
+const joinData = (...p) => path.join(DATA_DIR, ...p);
+const CONFIG_PATH = joinData('config.json');
 
 // --- config defaults used if data/config.json is missing ---
 const DEFAULT_CONFIG = {
@@ -56,14 +91,21 @@ function readConfig() {
   }
 }
 function writeConfig(cfg) {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch {}
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
 }
 
-// simple admin-token guard for non-/api/admin routes
+// timing-safe admin-token guard (used only where needed)
+function timingSafeEqual(a = '', b = '') {
+  const A = Buffer.from(a);
+  const B = Buffer.from(b);
+  if (A.length !== B.length) return false;
+  try { return crypto.timingSafeEqual(A, B); } catch { return false; }
+}
 function requireAdminToken(req, res, next) {
-  const t = cleanToken(req.headers['x-admin-token'] || '');
-  if (!t || t !== (process.env.ADMIN_TOKEN || '')) {
+  const token = cleanToken(req.headers['x-admin-token'] || '');
+  const expected = process.env.ADMIN_TOKEN || '';
+  if (!token || !expected || !timingSafeEqual(token, expected)) {
     return res.status(401).json({ ok: false, error: 'invalid admin token' });
   }
   next();
@@ -71,40 +113,19 @@ function requireAdminToken(req, res, next) {
 
 // --- License wiring ---
 const license = require('./lib/license');
-// only log license status if we're not skipping in demo
-license.loadAndValidate().then(s => { if (!SKIP_LICENSE) console.log('License:', s.reason); });
+license.loadAndValidate().then(s => {
+  console.log('License:', s.reason);
+});
 
-// Expose license status for UI
-app.get('/api/license/status', (_req, res) => res.json(license.getStatus()));
-
-// PUBLIC admin-auth endpoints (allowed even if license invalid)
-const ADMIN_PUBLIC = new Set(['/login', '/bootstrap', '/state', '/health']);
-
-// helpful boot log so you can see the bypass is active
-if (SKIP_LICENSE) console.log('DEMO_SKIP_LICENSE=true - bypassing license checks for /api/admin and /api/scores');
-
-app.use('/api/admin', (req, res, next) => {
-  // allow public admin endpoints through this gate
-  if (ADMIN_PUBLIC.has(req.path)) return next();
-
-  // demo bypass: skip license check entirely
-  if (SKIP_LICENSE) return next();
-
-  // otherwise license must be valid
+// Simple license gate middleware (no demo/bypass)
+function requireValidLicense(req, res, next) {
   const s = license.getStatus();
   if (!s.ok) return res.status(403).json({ error: 'License invalid: ' + s.reason });
   next();
-});
+}
 
-// Require license for scores (unless demo bypass)
-app.use('/api/scores', (req, res, next) => {
-  if (SKIP_LICENSE) return next();
-  const s = license.getStatus();
-  if (!s.ok) return res.status(403).json({ error: 'License invalid: ' + s.reason });
-  next();
-});
+// -------------------- Global middleware --------------------
 
-/* -------------------- Global middleware -------------------- */
 // CORS allowlist via env: CORS_ORIGIN="http://localhost:3000,https://your.site"
 const ALLOW = (process.env.CORS_ORIGIN || '')
   .split(',').map(s => s.trim()).filter(Boolean);
@@ -118,14 +139,26 @@ if (ALLOW.length) {
   app.use(cors());
 }
 
+// Security headers
+app.use(helmet());
+
+// Light rate-limit on admin API surface
+const adminLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200 });
+app.use('/api/admin', adminLimiter);
+
 app.use(cookieParser());
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false }));
 
-// Static assets
-app.use('/data', express.static(join('data'))); // (disable in prod if you prefer)
-app.use(express.static(join('public')));
-app.use('/ui', express.static(join('ui')));
+// Health (Render/Railway)
+app.get('/health', (_req, res) => res.json({ ok: true, mode: APP_MODE, ts: Date.now() }));
+app.get('/healthz', (_req, res) => res.status(200).send('ok')); // legacy/simple
+
+// Static assets (SAFE): expose only read-only scores + fixtures
+app.use('/data/scores', express.static(joinData('scores')));
+app.use('/data/fixtures', express.static(joinData('fixtures')));
+app.use(express.static(joinRepo('public')));
+app.use('/ui', express.static(joinRepo('ui')));
 
 // Fix old encoded URLs (legacy)
 app.use((req, res, next) => {
@@ -159,8 +192,14 @@ app.post('/api/config', requireAdminToken, (req, res) => {
 
 /* -------------------- Safe require + mount -------------------- */
 function safeRequire(label, p) {
-  try { return { ok: true, mod: require(p) }; }
-  catch (e) { console.warn(`Skipping ${label}:`, e.message); return { ok: false, mod: null, reason: e.message }; }
+  try {
+    const mod = require(p);
+    console.log(`[boot] mounted ${label} at runtime path ${p}`);
+    return { ok: true, mod };
+  } catch (e) {
+    console.warn(`[boot] Skipping ${label}: ${e.message}`);
+    return { ok: false, mod: null, reason: e.message };
+  }
 }
 function mount(label, route, mod) {
   app.use(route, mod);
@@ -179,7 +218,7 @@ if (fixtures.ok) {
     const cfg = readConfig();
     const week = Math.max(1, parseInt(req.query.week, 10) || 1);
     const season = cfg.season || 2025;
-    const fpath = join('data', 'fixtures', `season-${season}`, `week-${week}.json`);
+    const fpath = path.join(DATA_DIR, 'fixtures', `season-${season}`, `week-${week}.json`);
     try {
       const txt = fs.readFileSync(fpath, 'utf8');
       const arr = JSON.parse(txt);
@@ -200,11 +239,13 @@ if (predictions.ok) {
   mount('./routes/predictions.js', '/predictions', predictions.mod);
 }
 
-// Scores
+// Scores — license-gated
 const scores = safeRequire('./routes/scores.js', './routes/scores');
 if (scores.ok) {
-  mount('./routes/scores.js', '/api/scores', scores.mod);
-  mount('./routes/scores.js', '/scores', scores.mod);
+  app.use('/api/scores', requireValidLicense, scores.mod);
+  app.use('/scores', requireValidLicense, scores.mod);
+  mounted.push({ label: './routes/scores.js', route: '/api/scores' });
+  mounted.push({ label: './routes/scores.js', route: '/scores' });
 }
 
 // Auth
@@ -221,7 +262,50 @@ if (players.ok) {
   mount('./routes/players.js', '/players', players.mod);
 }
 
-// ---- Admin auth (mounted BEFORE other /api/admin routes; allowed by ADMIN_PUBLIC whitelist) ----
+/* -------------------- LICENSE ENDPOINTS -------------------- */
+// Public status
+app.get('/api/license/status', (_req, res) => res.json(license.getStatus()));
+
+// NEW: apply license OUTSIDE /api/admin to avoid any admin router gates.
+// Still requires x-admin-token.
+app.post('/api/license/apply', requireAdminToken, express.json(), async (req, res) => {
+  try {
+    const token = String(req.body?.license || '').trim();
+    if (!token) return res.status(400).json({ ok: false, error: 'missing license' });
+
+    // persist into DATA_DIR/config.json
+    const prev = readConfig();
+    const next = { ...prev, license: { token, appliedAt: new Date().toISOString() } };
+    writeConfig(next);
+
+    // reload validation
+    await license.loadAndValidate().catch(e => ({ ok: false, reason: String(e) }));
+    return res.json({ ok: !!license.getStatus().ok, status: license.getStatus() });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Legacy admin paths (kept for compatibility)
+app.post('/api/admin/license', requireAdminToken, express.json(), async (req, res) => {
+  try {
+    const token = String(req.body?.license || '').trim();
+    if (!token) return res.status(400).json({ ok: false, error: 'missing license' });
+    const prev = readConfig();
+    const next = { ...prev, license: { token, appliedAt: new Date().toISOString() } };
+    writeConfig(next);
+    await license.loadAndValidate().catch(e => ({ ok: false, reason: String(e) }));
+    return res.json({ ok: !!license.getStatus().ok, status: license.getStatus() });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+app.get('/api/admin/license/status', requireAdminToken, (_req, res) => {
+  return res.json(license.getStatus());
+});
+
+// ---- Admin auth (mounted BEFORE other /api/admin routes) ----
 const adminAuth = require('./routes/admin_auth');
 app.use('/api/admin', adminAuth);
 mounted.push({ label: './routes/admin_auth.js', route: '/api/admin' });
@@ -232,17 +316,11 @@ if (admin.ok) {
   mount('./routes/admin.js', '/api/admin', admin.mod);
 }
 
-// ---- Locks route (license-gated unless demo bypass) ----
+// ---- Locks route — license-gated ----
 {
   const locksRt = safeRequire('./routes/locks.js', './routes/locks');
   if (locksRt.ok) {
-    const locksGate = (req, res, next) => {
-      if (SKIP_LICENSE) return next();
-      const s = license.getStatus();
-      if (!s.ok) return res.status(403).json({ error: 'License invalid: ' + s.reason });
-      next();
-    };
-    app.use('/api/locks', locksGate, locksRt.mod);
+    app.use('/api/locks', requireValidLicense, locksRt.mod);
     mounted.push({ label: './routes/locks.js', route: '/api/locks' });
   } else {
     console.warn('Skipping ./routes/locks.js:', locksRt.reason || 'failed to load');
@@ -261,30 +339,28 @@ if (admin.ok) {
 }
 
 /* -------------------- Diagnostics -------------------- */
-app.get('/api/__health', (_req, res) => res.json({ ok: true, mounted }));
+app.get('/api/__health', (_req, res) =>
+  res.json({ ok: true, mounted, mode: APP_MODE, dataDir: DATA_DIR })
+);
 app.get('/api/__routes', (_req, res) => res.json(mounted));
 
-// ---- Start reminders scheduler once ----
-const remindersSvc = safeRequire('./services/reminders.js', './services/reminders');
-if (remindersSvc.ok && typeof remindersSvc.mod?.startScheduler === 'function') {
-  if (!global.__REMINDERS_STARTED__) {
-    remindersSvc.mod.startScheduler();
-    global.__REMINDERS_STARTED__ = true;
-  }
-} else {
-  console.warn('Reminders service not started:', remindersSvc.reason || 'no startScheduler()');
-}
-
-/* -------------------- Map legacy UI pages -------------------- */
-['Part_A_PIN.html', 'Part_B_Predictions.html', 'Part_D_Scoring.html', 'Part_E_Season.html']
-  .forEach(page => {
-    app.get('/' + page, (_req, res) => res.sendFile(join('public', page)));
-  });
+/* -------------------- Map UI pages -------------------- */
+[
+  'Part_A_PIN.html',
+  'Part_B_Predictions.html',
+  'Part_D_Scoring.html',
+  'Part_E_Season.html',
+  'Part_E_Matrix.html', // optional matrix page
+].forEach(page => {
+  app.get('/' + page, (_req, res) => res.sendFile(joinRepo('public', page)));
+});
 
 /* -------------------- Root -------------------- */
-app.get('/', (_req, res) => res.redirect('/Part_A_PIN.html'));
+// Return the PIN page so platform healthchecks still get 200 at /
+app.get('/', (_req, res) => res.sendFile(joinRepo('public', 'Part_A_PIN.html')));
 
 /* -------------------- Listen -------------------- */
-app.listen(PORT, () => {
-  console.log(`MatchM8 listening on http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`MatchM8 listening on port ${PORT} (mode=${APP_MODE})`);
+  console.log(`DATA_DIR = ${DATA_DIR}`);
 });

@@ -5,12 +5,19 @@
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node index.js",
-    "dev": "nodemon --watch . --ext js,json,html --exec node index.js",
+    "start": "node seed-config.js && node index.js",
+    "dev": "nodemon --watch . --ext js,json,html --exec \"node seed-config.js && node index.js\"",
     "worker": "node jobs/email-worker.js",
     "cron": "node jobs/cron.js",
-    "factory:reset": "node scripts/factory-reset.js --force",
-    "factory:reset:keep": "node scripts/factory-reset.js --keep-players --force"
+    "reset:factory": "node scripts/factory-reset.js --force",
+    "reset:factory:admin": "node scripts/factory-reset.js --force --keep-admin",
+    "reset:factory:players": "node scripts/factory-reset.js --force --keep-players",
+    "reset:factory:fresh": "node scripts/factory-reset.js --force --reset-config",
+    "reset:factory:full": "node scripts/factory-reset.js --force --reset-config --purge-mail",
+    "env:demo": "node -e \"require('fs').copyFileSync('.env.demo','.env');console.log('=> .env = demo')\"",
+    "env:prod": "node -e \"require('fs').copyFileSync('.env.prod','.env');console.log('=> .env = prod')\"",
+    "start:demo": "npm run env:demo && node index.js",
+    "start:prod": "npm run env:prod && node index.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.56.0",
@@ -20,6 +27,8 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "express-rate-limit": "^8.0.1",
+    "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.2",
     "luxon": "^3.7.1",
     "node-cron": "^3.0.3",
