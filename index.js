@@ -48,7 +48,6 @@ function ensureDataDirsAndSeed() {
   const seedDir = path.join(__dirname, 'data', '_seed');
   const seededMarker = path.join(DATA_DIR, '.seeded');
 
-  // Seed only if DATA_DIR looks empty (no files besides .seeded) and _seed exists.
   try {
     const already = fs.existsSync(seededMarker);
     const hasSeed = fs.existsSync(seedDir);
@@ -125,27 +124,31 @@ function requireValidLicense(req, res, next) {
   next();
 }
 
-// Expose license status for UI (public)
-app.get('/api/license/status', (_req, res) => res.json(license.getStatus()));
-
 // -------------------- Global middleware --------------------
-app.use(cors({
-  origin: (origin, cb) => {
-    const ALLOW = (process.env.CORS_ORIGIN || '')
-      .split(',').map(s => s.trim()).filter(Boolean);
-    if (!origin || ALLOW.length === 0 || ALLOW.includes(origin)) return cb(null, origin);
-    return cb(new Error('Not allowed by CORS'));
-  },
-  credentials: false
-}));
+
+// CORS allowlist via env: CORS_ORIGIN="http://localhost:3000,https://your.site"
+const ALLOW = (process.env.CORS_ORIGIN || '')
+  .split(',').map(s => s.trim()).filter(Boolean);
+
+if (ALLOW.length) {
+  app.use(cors({
+    origin: (origin, cb) => (!origin || ALLOW.includes(origin)) ? cb(null, origin) : cb(new Error('Not allowed by CORS')),
+    credentials: false
+  }));
+} else {
+  app.use(cors());
+}
+
+// Security headers
 app.use(helmet());
-app.use(cookieParser());
-app.use(express.json({ limit: '1mb' }));
-app.use(express.urlencoded({ extended: false }));
 
 // Light rate-limit on admin API surface
 const adminLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200 });
 app.use('/api/admin', adminLimiter);
+
+app.use(cookieParser());
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: false }));
 
 // Health (Render/Railway)
 app.get('/health', (_req, res) => res.json({ ok: true, mode: APP_MODE, ts: Date.now() }));
@@ -259,10 +262,13 @@ if (players.ok) {
   mount('./routes/players.js', '/players', players.mod);
 }
 
-/* -------------------- License endpoints -------------------- */
+/* -------------------- LICENSE ENDPOINTS -------------------- */
+// Public status
+app.get('/api/license/status', (_req, res) => res.json(license.getStatus()));
+
 // NEW: apply license OUTSIDE /api/admin to avoid any admin router gates.
-// Still protected by x-admin-token.
-app.post('/api/license/apply', requireAdminToken, async (req, res) => {
+// Still requires x-admin-token.
+app.post('/api/license/apply', requireAdminToken, express.json(), async (req, res) => {
   try {
     const token = String(req.body?.license || '').trim();
     if (!token) return res.status(400).json({ ok: false, error: 'missing license' });
@@ -272,7 +278,7 @@ app.post('/api/license/apply', requireAdminToken, async (req, res) => {
     const next = { ...prev, license: { token, appliedAt: new Date().toISOString() } };
     writeConfig(next);
 
-    // reload/validate
+    // reload validation
     await license.loadAndValidate().catch(e => ({ ok: false, reason: String(e) }));
     return res.json({ ok: !!license.getStatus().ok, status: license.getStatus() });
   } catch (e) {
@@ -280,16 +286,14 @@ app.post('/api/license/apply', requireAdminToken, async (req, res) => {
   }
 });
 
-// Legacy admin endpoints (kept for compatibility)
-app.post('/api/admin/license', requireAdminToken, async (req, res) => {
+// Legacy admin paths (kept for compatibility)
+app.post('/api/admin/license', requireAdminToken, express.json(), async (req, res) => {
   try {
     const token = String(req.body?.license || '').trim();
     if (!token) return res.status(400).json({ ok: false, error: 'missing license' });
-
     const prev = readConfig();
     const next = { ...prev, license: { token, appliedAt: new Date().toISOString() } };
     writeConfig(next);
-
     await license.loadAndValidate().catch(e => ({ ok: false, reason: String(e) }));
     return res.json({ ok: !!license.getStatus().ok, status: license.getStatus() });
   } catch (e) {
@@ -299,11 +303,6 @@ app.post('/api/admin/license', requireAdminToken, async (req, res) => {
 
 app.get('/api/admin/license/status', requireAdminToken, (_req, res) => {
   return res.json(license.getStatus());
-});
-
-// Simple admin health (token-only)
-app.get('/api/admin/health', requireAdminToken, (_req, res) => {
-  res.json({ ok: true, ts: Date.now() });
 });
 
 // ---- Admin auth (mounted BEFORE other /api/admin routes) ----
