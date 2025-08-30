@@ -140,7 +140,10 @@ if (ALLOW.length) {
 }
 
 // Security headers
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: false, // allow inline scripts on admin.html
+}));
+
 
 // Light rate-limit on admin API surface
 const adminLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200 });
