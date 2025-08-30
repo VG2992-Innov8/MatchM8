@@ -363,4 +363,22 @@ app.get('/', (_req, res) => res.sendFile(joinRepo('public', 'Part_A_PIN.html')))
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`MatchM8 listening on port ${PORT} (mode=${APP_MODE})`);
   console.log(`DATA_DIR = ${DATA_DIR}`);
+
+    // Auto-apply LICENSE_TOKEN on boot (works on Free plan without a disk)
+  try {
+    const tok = cleanToken(process.env.LICENSE_TOKEN || '');
+    if (tok) {
+      const prev = readConfig();
+      const next = { ...prev, license: { token: tok, appliedAt: new Date().toISOString() } };
+      writeConfig(next);
+      license.loadAndValidate()
+        .then(s => console.log('[license] auto-apply on boot:', s.reason))
+        .catch(err => console.error('[license] auto-apply failed:', err.message));
+    } else {
+      console.log('[license] no LICENSE_TOKEN env; skipping auto-apply');
+    }
+  } catch (e) {
+    console.error('[license] auto-apply error:', e.message);
+  }
+
 });

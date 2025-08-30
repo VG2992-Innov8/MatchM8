@@ -1,44 +1,45 @@
 // public/js/admin.js
 
-document.addEventListener("DOMContentLoaded", () => {
-  const saveBtn = document.getElementById("saveResults");
+document.addEventListener('DOMContentLoaded', () => {
+  const saveBtn = document.getElementById('saveResults');
   if (!saveBtn) return;
 
-  saveBtn.addEventListener("click", async () => {
-    const week = new URLSearchParams(window.location.search).get("week");
-    const results = {};
+  saveBtn.addEventListener('click', async () => {
+    const params = new URLSearchParams(window.location.search);
+    const week = params.get('week') || '';
+    const token = localStorage.getItem('admin_token') || '';
 
-    // Collect scores from inputs
-    document.querySelectorAll("input[data-team]").forEach((input) => {
+    const results = {};
+    document.querySelectorAll('input[data-team]').forEach((input) => {
       const team = input.dataset.team;
       const score = parseInt(input.value, 10);
-      if (!isNaN(score)) {
-        results[team] = score;
-      }
+      if (!isNaN(score)) results[team] = score;
     });
 
-    try {
-      const token = localStorage.getItem("admin_token");
+    if (!token) {
+      alert('Admin token not set. Open the Admin page and click "Use Token" first.');
+      return;
+    }
 
-      const response = await fetch(`/api/admin/save-results?week=${week}`, {
-        method: "POST",
+    try {
+      const res = await fetch(`/api/admin/save-results?week=${encodeURIComponent(week)}`, {
+        method: 'POST',
         headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}`,
+          'content-type': 'application/json',
+          'x-admin-token': token,
         },
         body: JSON.stringify({ results }),
       });
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to save results.");
+      const data = await res.json();
+      if (!res.ok || (data && data.ok === false)) {
+        throw new Error((data && data.error) || 'Failed to save results.');
       }
 
-      alert("Ã¢Å"â€¦ Results saved successfully!");
+      alert('Results saved successfully!');
     } catch (err) {
-      console.error("Ã¢ÂÅ' Error saving results:", err);
-      alert("Ã¢ÂÅ' Failed to save results.");
+      console.error('Error saving results:', err);
+      alert('Failed to save results.');
     }
   });
 });
