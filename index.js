@@ -1,11 +1,10 @@
-// index.js — MatchM8 server (final, prod-hardened)
+// index.js — MatchM8 server (prod-ready with ephemeral fallback + seeding)
 
 const path = require('path');
 const fs = require('fs');
 
 // ------------- Load & sanitize environment -------------
-const envPath = path.join(__dirname, '.env');
-require('dotenv').config({ path: envPath, override: true });
+require('dotenv').config({ path: path.join(__dirname, '.env'), override: true });
 
 function cleanToken(s = '') {
   return String(s)
@@ -14,11 +13,15 @@ function cleanToken(s = '') {
     .replace(/^\s*['"]|['"]\s*$/g, '')
     .trim();
 }
-if (process.env.ADMIN_TOKEN) {
-  process.env.ADMIN_TOKEN = cleanToken(process.env.ADMIN_TOKEN);
-}
-if (process.env.LICENSE_PUBKEY_B64) {
-  process.env.LICENSE_PUBKEY_B64 = cleanToken(process.env.LICENSE_PUBKEY_B64);
+if (process.env.ADMIN_TOKEN) process.env.ADMIN_TOKEN = cleanToken(process.env.ADMIN_TOKEN);
+if (process.env.LICENSE_PUBKEY_B64) process.env.LICENSE_PUBKEY_B64 = cleanToken(process.env.LICENSE_PUBKEY_B64);
+
+// If DATA_DIR not provided (e.g., Render Free), default to /tmp (ephemeral) so writes succeed.
+// On Starter w/ disk, set DATA_DIR=/data in the Render env and this will be used instead.
+if (!process.env.DATA_DIR) {
+  const fallback = process.env.RENDER ? '/tmp/matchm8-data' : path.join(__dirname, 'data');
+  process.env.DATA_DIR = fallback;
+  console.log(`[boot] DATA_DIR not set; using ${fallback} ${process.env.RENDER ? '(ephemeral)' : ''}`);
 }
 
 // 🔒 Lock to prod
@@ -30,11 +33,39 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const cookieParser = require('cookie-parser');
 const crypto = require('crypto');
-const { DATA_DIR } = require('./lib/paths');     // <- central data dir (env DATA_DIR or ./data)
+const { DATA_DIR } = require('./lib/paths'); // central data dir (reads env DATA_DIR or ./data)
+
+// Ensure data dir exists + common subdirs; optionally seed demo content once.
+function ensureDataDirsAndSeed() {
+  const subdirs = [
+    '.', 'fixtures', 'results', 'predictions',
+    path.join('scores', 'weeks'), 'scores'
+  ];
+  for (const rel of subdirs) {
+    try { fs.mkdirSync(path.join(DATA_DIR, rel), { recursive: true }); } catch {}
+  }
+
+  const seedDir = path.join(__dirname, 'data', '_seed');
+  const seededMarker = path.join(DATA_DIR, '.seeded');
+
+  // Seed only if DATA_DIR looks empty (no files besides .seeded) and _seed exists.
+  try {
+    const already = fs.existsSync(seededMarker);
+    const hasSeed = fs.existsSync(seedDir);
+    if (!already && hasSeed) {
+      fs.cpSync(seedDir, DATA_DIR, { recursive: true, force: false, errorOnExist: false });
+      fs.writeFileSync(seededMarker, new Date().toISOString());
+      console.log(`[boot] Seeded demo data from ${seedDir} -> ${DATA_DIR}`);
+    }
+  } catch (e) {
+    console.warn('[boot] Seeding skipped:', e.message);
+  }
+}
+ensureDataDirsAndSeed();
 
 const app = express();
-app.set('trust proxy', 1);                        // ✅ for Render/Railway/any proxy
-const PORT = process.env.PORT || 3000;            // ✅ use platform port if provided
+app.set('trust proxy', 1); // ✅ for Render/Railway/any proxy
+const PORT = process.env.PORT || 3000; // ✅ use platform port if provided
 
 const joinRepo = (...p) => path.join(__dirname, ...p);
 const joinData = (...p) => path.join(DATA_DIR, ...p);
@@ -94,34 +125,27 @@ function requireValidLicense(req, res, next) {
   next();
 }
 
-// Expose license status for UI
+// Expose license status for UI (public)
 app.get('/api/license/status', (_req, res) => res.json(license.getStatus()));
 
 // -------------------- Global middleware --------------------
-
-// CORS allowlist via env: CORS_ORIGIN="http://localhost:3000,https://your.site"
-const ALLOW = (process.env.CORS_ORIGIN || '')
-  .split(',').map(s => s.trim()).filter(Boolean);
-
-if (ALLOW.length) {
-  app.use(cors({
-    origin: (origin, cb) => (!origin || ALLOW.includes(origin)) ? cb(null, origin) : cb(new Error('Not allowed by CORS')),
-    credentials: false
-  }));
-} else {
-  app.use(cors());
-}
-
-// Security headers
+app.use(cors({
+  origin: (origin, cb) => {
+    const ALLOW = (process.env.CORS_ORIGIN || '')
+      .split(',').map(s => s.trim()).filter(Boolean);
+    if (!origin || ALLOW.length === 0 || ALLOW.includes(origin)) return cb(null, origin);
+    return cb(new Error('Not allowed by CORS'));
+  },
+  credentials: false
+}));
 app.use(helmet());
+app.use(cookieParser());
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: false }));
 
 // Light rate-limit on admin API surface
 const adminLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200 });
 app.use('/api/admin', adminLimiter);
-
-app.use(cookieParser());
-app.use(express.json({ limit: '1mb' }));
-app.use(express.urlencoded({ extended: false }));
 
 // Health (Render/Railway)
 app.get('/health', (_req, res) => res.json({ ok: true, mode: APP_MODE, ts: Date.now() }));
@@ -234,39 +258,58 @@ if (players.ok) {
   mount('./routes/players.js', '/api/players', players.mod);
   mount('./routes/players.js', '/players', players.mod);
 }
-// --- ADD THIS BLOCK: public admin license endpoints (token-only gate) ---
-app.post('/api/admin/license', requireAdminToken, express.json(), async (req, res) => {
+
+/* -------------------- License endpoints -------------------- */
+// NEW: apply license OUTSIDE /api/admin to avoid any admin router gates.
+// Still protected by x-admin-token.
+app.post('/api/license/apply', requireAdminToken, async (req, res) => {
   try {
     const token = String(req.body?.license || '').trim();
-    if (!token) return res.status(400).json({ ok:false, error:'missing license' });
+    if (!token) return res.status(400).json({ ok: false, error: 'missing license' });
 
-    // persist license token into config.json
+    // persist into DATA_DIR/config.json
     const prev = readConfig();
     const next = { ...prev, license: { token, appliedAt: new Date().toISOString() } };
     writeConfig(next);
 
-    // re-validate after writing
-    const stat = await license.loadAndValidate().catch(e => ({ ok:false, reason: String(e) }));
-    const s = license.getStatus();
-    return res.json({ ok: !!s.ok, status: s, note: stat?.reason || undefined });
+    // reload/validate
+    await license.loadAndValidate().catch(e => ({ ok: false, reason: String(e) }));
+    return res.json({ ok: !!license.getStatus().ok, status: license.getStatus() });
   } catch (e) {
-    return res.status(500).json({ ok:false, error: String(e) });
+    return res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Legacy admin endpoints (kept for compatibility)
+app.post('/api/admin/license', requireAdminToken, async (req, res) => {
+  try {
+    const token = String(req.body?.license || '').trim();
+    if (!token) return res.status(400).json({ ok: false, error: 'missing license' });
+
+    const prev = readConfig();
+    const next = { ...prev, license: { token, appliedAt: new Date().toISOString() } };
+    writeConfig(next);
+
+    await license.loadAndValidate().catch(e => ({ ok: false, reason: String(e) }));
+    return res.json({ ok: !!license.getStatus().ok, status: license.getStatus() });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e) });
   }
 });
 
 app.get('/api/admin/license/status', requireAdminToken, (_req, res) => {
   return res.json(license.getStatus());
 });
-// --- END ADD ---
 
+// Simple admin health (token-only)
+app.get('/api/admin/health', requireAdminToken, (_req, res) => {
+  res.json({ ok: true, ts: Date.now() });
+});
 
 // ---- Admin auth (mounted BEFORE other /api/admin routes) ----
 const adminAuth = require('./routes/admin_auth');
 app.use('/api/admin', adminAuth);
 mounted.push({ label: './routes/admin_auth.js', route: '/api/admin' });
-
-// ❌ Removed: Admin dev license toggles (no dev/bypass in prod)
-// (was: ./routes/admin-license-dev.js)
 
 // ---- Admin routes (guarded; token checks inside route impl) ----
 const admin = safeRequire('./routes/admin.js', './routes/admin');
@@ -297,7 +340,9 @@ if (admin.ok) {
 }
 
 /* -------------------- Diagnostics -------------------- */
-app.get('/api/__health', (_req, res) => res.json({ ok: true, mounted, mode: APP_MODE, dataDir: DATA_DIR }));
+app.get('/api/__health', (_req, res) =>
+  res.json({ ok: true, mounted, mode: APP_MODE, dataDir: DATA_DIR })
+);
 app.get('/api/__routes', (_req, res) => res.json(mounted));
 
 /* -------------------- Map UI pages -------------------- */
@@ -306,13 +351,13 @@ app.get('/api/__routes', (_req, res) => res.json(mounted));
   'Part_B_Predictions.html',
   'Part_D_Scoring.html',
   'Part_E_Season.html',
-  'Part_E_Matrix.html',           // ⬅️ new matrix page
+  'Part_E_Matrix.html', // optional matrix page
 ].forEach(page => {
   app.get('/' + page, (_req, res) => res.sendFile(joinRepo('public', page)));
 });
 
 /* -------------------- Root -------------------- */
-// Root (new) — return 200 so platform healthcheck passes
+// Return the PIN page so platform healthchecks still get 200 at /
 app.get('/', (_req, res) => res.sendFile(joinRepo('public', 'Part_A_PIN.html')));
 
 /* -------------------- Listen -------------------- */
