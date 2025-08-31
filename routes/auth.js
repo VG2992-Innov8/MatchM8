@@ -1,4 +1,4 @@
-// routes/auth.js Ã¢â‚¬" bcrypt PIN set/verify/change (back-compatible) + whoami cookies
+// routes/auth.js — bcrypt PIN set/verify/change (back-compatible) + whoami cookies
 const express = require('express');
 const path = require('path');
 const { readFile } = require('fs/promises');
@@ -16,13 +16,13 @@ async function savePlayers(list) { await writeJsonAtomic(PLAYERS, list); }
 
 // Helpers
 const asId = v => v != null ? String(v) : undefined;
-const isValidPin = v => typeof v === 'string' ? v.trim().length >= 4 : String(v||'').length >= 4;
+const isValidPin = v => typeof v === 'string' ? v.trim().length >= 4 : String(v || '').length >= 4;
 
 // ---- NEW: cookie helpers for whoami/personalization ----
 const isProd = process.env.NODE_ENV === 'production';
 function setWhoamiCookies(res, player) {
   // lightweight, non-HttpOnly so front-end can read (used only for display)
-  const base = { sameSite: 'Lax', httpOnly: false, secure: isProd, maxAge: 180*24*60*60*1000 }; // ~180 days
+  const base = { sameSite: 'Lax', httpOnly: false, secure: isProd, maxAge: 180 * 24 * 60 * 60 * 1000 }; // ~180 days
   res.cookie('player_id',   String(player.id),   base);
   res.cookie('player_name', String(player.name), base);
 }
@@ -43,7 +43,10 @@ router.post('/pin/set', express.json(), async (req, res) => {
   if (!isValidPin(pin)) return res.status(400).json({ error: 'PIN must be at least 4 characters' });
 
   const players = await loadPlayers();
-  const idx = players.findIndex(p => (player_id && asId(p.id) === asId(player_id)) || (name && p.name === name));
+  const idx = players.findIndex(p =>
+    (player_id && asId(p.id) === asId(player_id)) ||
+    (name && p.name === name)
+  );
   if (idx < 0) return res.status(404).json({ error: 'player not found' });
 
   if (players[idx].pin_hash) return res.status(409).json({ error: 'PIN already set' });
@@ -64,23 +67,23 @@ router.post('/pin/set', express.json(), async (req, res) => {
 router.post('/pin/verify', express.json(), async (req, res) => {
   const { player_id, name, pin } = req.body || {};
   const players = await loadPlayers();
-// Robust lookup: by id if provided, otherwise name (case/space insensitive)
-const norm = s => String(s || '')
-  .normalize('NFKC')
-  .trim()
-  .replace(/\s+/g, ' ')
-  .toLowerCase();
 
-let p = null;
-if (player_id) {
-  p = players.find(u => asId(u.id) === asId(player_id));
-}
-if (!p && name) {
-  const needle = norm(name);
-  p = players.find(u => norm(u.name) === needle);
-}
-if (!p) return res.status(404).json({ error: 'player not found' });
+  // Robust lookup: by id if provided, otherwise name (case/space insensitive)
+  const norm = s => String(s || '')
+    .normalize('NFKC')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
 
+  let p = null;
+  if (player_id) {
+    p = players.find(u => asId(u.id) === asId(player_id));
+  }
+  if (!p && name) {
+    const needle = norm(name);
+    p = players.find(u => norm(u.name) === needle);
+  }
+  if (!p) return res.status(404).json({ error: 'player not found' });
 
   // Back-compat: migrate on first successful verify
   if (p.pin && String(pin) === String(p.pin)) {
@@ -110,7 +113,10 @@ router.post('/pin/change', express.json(), async (req, res) => {
   if (!isValidPin(new_pin)) return res.status(400).json({ error: 'New PIN must be at least 4 characters' });
 
   const players = await loadPlayers();
-  const idx = players.findIndex(u => (player_id && asId(u.id) === asId(player_id)) || (name && u.name === name));
+  const idx = players.findIndex(u =>
+    (player_id && asId(u.id) === asId(player_id)) ||
+    (name && u.name === name)
+  );
   if (idx < 0) return res.status(404).json({ error: 'player not found' });
 
   const p = players[idx];
