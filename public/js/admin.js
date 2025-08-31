@@ -1,7 +1,6 @@
 // public/js/admin.js
-
 document.addEventListener('DOMContentLoaded', () => {
-  const saveBtn = document.getElementById('saveResults');
+  const saveBtn = document.getElementById('btnSaveResults');
   if (!saveBtn) return;
 
   saveBtn.addEventListener('click', async () => {
@@ -10,10 +9,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const token = localStorage.getItem('admin_token') || '';
 
     const results = {};
-    document.querySelectorAll('input[data-team]').forEach((input) => {
-      const team = input.dataset.team;
-      const score = parseInt(input.value, 10);
-      if (!isNaN(score)) results[team] = score;
+    document.querySelectorAll('input[data-id]').forEach((input) => {
+      const id = input.getAttribute('data-id');
+      const side = input.getAttribute('data-side');
+      const val = input.value === '' ? null : Number(input.value);
+      if (!results[id]) results[id] = { homeGoals: null, awayGoals: null };
+      if (side === 'home') results[id].homeGoals = val;
+      if (side === 'away') results[id].awayGoals = val;
     });
 
     if (!token) {
@@ -22,13 +24,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     try {
-      const res = await fetch(`/api/admin/save-results?week=${encodeURIComponent(week)}`, {
+      const res = await fetch(`/api/admin/results`, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
           'x-admin-token': token,
         },
-        body: JSON.stringify({ results }),
+        body: JSON.stringify({ week: Number(week) || 1, results }),
       });
 
       const data = await res.json();

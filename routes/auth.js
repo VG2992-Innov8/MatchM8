@@ -4,10 +4,11 @@ const path = require('path');
 const { readFile } = require('fs/promises');
 const bcrypt = require('bcryptjs');
 const { writeJsonAtomic } = require('../utils/atomicJson');
-const { DATA_DIR } = require('../lib/paths'); // ✅ use the central data dir
+const { DATA_DIR } = require('../lib/paths');           // ✅ use central runtime data dir
 
 const router = express.Router();
-const PLAYERS = path.join(DATA_DIR, 'players.json'); // ✅ point to DATA_DIR
+const PLAYERS = path.join(DATA_DIR, 'players.json');     // ✅ read/write in DATA_DIR
+console.log('[auth] PLAYERS =>', PLAYERS);
 
 async function loadPlayers() {
   try { return JSON.parse(await readFile(PLAYERS, 'utf8')); }
@@ -17,13 +18,13 @@ async function savePlayers(list) { await writeJsonAtomic(PLAYERS, list); }
 
 // Helpers
 const asId = v => v != null ? String(v) : undefined;
-const isValidPin = v => typeof v === 'string' ? v.trim().length >= 4 : String(v || '').length >= 4;
+const isValidPin = v => typeof v === 'string' ? v.trim().length >= 4 : String(v||'').length >= 4;
 
-// ---- NEW: cookie helpers for whoami/personalization ----
+// ---- cookie helpers for whoami/personalization ----
 const isProd = process.env.NODE_ENV === 'production';
 function setWhoamiCookies(res, player) {
   // lightweight, non-HttpOnly so front-end can read (used only for display)
-  const base = { sameSite: 'Lax', httpOnly: false, secure: isProd, maxAge: 180 * 24 * 60 * 60 * 1000 }; // ~180 days
+  const base = { sameSite: 'Lax', httpOnly: false, secure: isProd, maxAge: 180*24*60*60*1000 }; // ~180 days
   res.cookie('player_id',   String(player.id),   base);
   res.cookie('player_name', String(player.name), base);
 }
@@ -32,6 +33,7 @@ function clearWhoamiCookies(res) {
   res.clearCookie('player_id', base);
   res.clearCookie('player_name', base);
 }
+
 // -------------------------------------------------------
 
 /**
@@ -44,10 +46,7 @@ router.post('/pin/set', express.json(), async (req, res) => {
   if (!isValidPin(pin)) return res.status(400).json({ error: 'PIN must be at least 4 characters' });
 
   const players = await loadPlayers();
-  const idx = players.findIndex(p =>
-    (player_id && asId(p.id) === asId(player_id)) ||
-    (name && p.name === name)
-  );
+  const idx = players.findIndex(p => (player_id && asId(p.id) === asId(player_id)) || (name && p.name === name));
   if (idx < 0) return res.status(404).json({ error: 'player not found' });
 
   if (players[idx].pin_hash) return res.status(409).json({ error: 'PIN already set' });
@@ -63,7 +62,7 @@ router.post('/pin/set', express.json(), async (req, res) => {
  * POST /api/auth/pin/verify
  * body: { player_id? | name?, pin }
  * Verifies a player's PIN; if legacy plaintext `pin` exists and matches, migrates to hash.
- * NEW: sets cookies (player_id, player_name) for personalization (/api/auth/whoami).
+ * Also sets cookies (player_id, player_name) for personalization (/api/auth/whoami).
  */
 router.post('/pin/verify', express.json(), async (req, res) => {
   const { player_id, name, pin } = req.body || {};
@@ -77,9 +76,7 @@ router.post('/pin/verify', express.json(), async (req, res) => {
     .toLowerCase();
 
   let p = null;
-  if (player_id) {
-    p = players.find(u => asId(u.id) === asId(player_id));
-  }
+  if (player_id) p = players.find(u => asId(u.id) === asId(player_id));
   if (!p && name) {
     const needle = norm(name);
     p = players.find(u => norm(u.name) === needle);
@@ -92,7 +89,7 @@ router.post('/pin/verify', express.json(), async (req, res) => {
     delete p.pin;
     p.pin_updated_at = new Date().toISOString();
     await savePlayers(players);
-    setWhoamiCookies(res, p); // NEW
+    setWhoamiCookies(res, p);
     return res.json({ ok: true, id: p.id, name: p.name });
   }
 
@@ -100,8 +97,7 @@ router.post('/pin/verify', express.json(), async (req, res) => {
   const ok = await bcrypt.compare(String(pin || ''), p.pin_hash);
   if (!ok) return res.status(401).json({ error: 'invalid PIN' });
 
-  // success
-  setWhoamiCookies(res, p); // NEW
+  setWhoamiCookies(res, p);
   return res.json({ ok: true, id: p.id, name: p.name });
 });
 
@@ -114,19 +110,13 @@ router.post('/pin/change', express.json(), async (req, res) => {
   if (!isValidPin(new_pin)) return res.status(400).json({ error: 'New PIN must be at least 4 characters' });
 
   const players = await loadPlayers();
-  const idx = players.findIndex(u =>
-    (player_id && asId(u.id) === asId(player_id)) ||
-    (name && u.name === name)
-  );
+  const idx = players.findIndex(u => (player_id && asId(u.id) === asId(player_id)) || (name && u.name === name));
   if (idx < 0) return res.status(404).json({ error: 'player not found' });
 
   const p = players[idx];
   let ok = false;
-  if (p.pin_hash) {
-    ok = await bcrypt.compare(String(old_pin || ''), p.pin_hash);
-  } else if (p.pin) {
-    ok = String(old_pin) === String(p.pin);
-  }
+  if (p.pin_hash) ok = await bcrypt.compare(String(old_pin || ''), p.pin_hash);
+  else if (p.pin) ok = String(old_pin) === String(p.pin);
   if (!ok) return res.status(401).json({ error: 'old PIN incorrect' });
 
   p.pin_hash = await bcrypt.hash(String(new_pin), 10);
@@ -134,15 +124,12 @@ router.post('/pin/change', express.json(), async (req, res) => {
   p.pin_updated_at = new Date().toISOString();
   await savePlayers(players);
 
-  // keep cookies in sync with the same identity
-  setWhoamiCookies(res, p); // optional
+  setWhoamiCookies(res, p);
   res.json({ ok: true, id: p.id, name: p.name });
 });
 
 /**
- * NEW: GET /api/auth/whoami
- * Returns { ok:true, player:{id,name} } if cookies are present, else 401.
- * Used by /public/hero.js to render "<Name>'s Predictions".
+ * GET /api/auth/whoami
  */
 router.get('/whoami', (req, res) => {
   const id = req.cookies?.player_id;
@@ -152,8 +139,7 @@ router.get('/whoami', (req, res) => {
 });
 
 /**
- * NEW: POST /api/auth/logout
- * Clears whoami cookies.
+ * POST /api/auth/logout
  */
 router.post('/logout', (_req, res) => {
   clearWhoamiCookies(res);

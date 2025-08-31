@@ -1,5 +1,4 @@
 // index.js — MatchM8 server (prod-ready with ephemeral fallback + seeding)
-
 const path = require('path');
 const fs = require('fs');
 
@@ -17,7 +16,6 @@ if (process.env.ADMIN_TOKEN) process.env.ADMIN_TOKEN = cleanToken(process.env.AD
 if (process.env.LICENSE_PUBKEY_B64) process.env.LICENSE_PUBKEY_B64 = cleanToken(process.env.LICENSE_PUBKEY_B64);
 
 // If DATA_DIR not provided (e.g., Render Free), default to /tmp (ephemeral) so writes succeed.
-// On Starter w/ disk, set DATA_DIR=/data in the Render env and this will be used instead.
 if (!process.env.DATA_DIR) {
   const fallback = process.env.RENDER ? '/tmp/matchm8-data' : path.join(__dirname, 'data');
   process.env.DATA_DIR = fallback;
@@ -33,6 +31,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const cookieParser = require('cookie-parser');
 const crypto = require('crypto');
+const fetchFn = (...args) => import('node-fetch').then(({default: f}) => f(...args)).catch(() => fetch(...args)); // Node18+ or node-fetch polyfill
 const { DATA_DIR } = require('./lib/paths'); // central data dir (reads env DATA_DIR or ./data)
 
 // Ensure data dir exists + common subdirs; optionally seed demo content once.
@@ -139,11 +138,10 @@ if (ALLOW.length) {
   app.use(cors());
 }
 
-// Security headers
+// Security headers (disable CSP so admin UI inline scripts work)
 app.use(helmet({
-  contentSecurityPolicy: false, // allow inline scripts on admin.html
+  contentSecurityPolicy: false,
 }));
-
 
 // Light rate-limit on admin API surface
 const adminLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200 });
@@ -157,7 +155,7 @@ app.use(express.urlencoded({ extended: false }));
 app.get('/health', (_req, res) => res.json({ ok: true, mode: APP_MODE, ts: Date.now() }));
 app.get('/healthz', (_req, res) => res.status(200).send('ok')); // legacy/simple
 
-// Static assets (SAFE): expose only read-only scores + fixtures
+// Static assets
 app.use('/data/scores', express.static(joinData('scores')));
 app.use('/data/fixtures', express.static(joinData('fixtures')));
 app.use(express.static(joinRepo('public')));
@@ -269,19 +267,16 @@ if (players.ok) {
 // Public status
 app.get('/api/license/status', (_req, res) => res.json(license.getStatus()));
 
-// NEW: apply license OUTSIDE /api/admin to avoid any admin router gates.
-// Still requires x-admin-token.
+// Apply license outside /api/admin (still requires x-admin-token).
 app.post('/api/license/apply', requireAdminToken, express.json(), async (req, res) => {
   try {
     const token = String(req.body?.license || '').trim();
     if (!token) return res.status(400).json({ ok: false, error: 'missing license' });
 
-    // persist into DATA_DIR/config.json
     const prev = readConfig();
     const next = { ...prev, license: { token, appliedAt: new Date().toISOString() } };
     writeConfig(next);
 
-    // reload validation
     await license.loadAndValidate().catch(e => ({ ok: false, reason: String(e) }));
     return res.json({ ok: !!license.getStatus().ok, status: license.getStatus() });
   } catch (e) {
@@ -353,13 +348,13 @@ app.get('/api/__routes', (_req, res) => res.json(mounted));
   'Part_B_Predictions.html',
   'Part_D_Scoring.html',
   'Part_E_Season.html',
-  'Part_E_Matrix.html', // optional matrix page
+  'Part_E_Matrix.html',
+  'admin.html'
 ].forEach(page => {
   app.get('/' + page, (_req, res) => res.sendFile(joinRepo('public', page)));
 });
 
 /* -------------------- Root -------------------- */
-// Return the PIN page so platform healthchecks still get 200 at /
 app.get('/', (_req, res) => res.sendFile(joinRepo('public', 'Part_A_PIN.html')));
 
 /* -------------------- Listen -------------------- */
@@ -367,7 +362,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`MatchM8 listening on port ${PORT} (mode=${APP_MODE})`);
   console.log(`DATA_DIR = ${DATA_DIR}`);
 
-    // Auto-apply LICENSE_TOKEN on boot (works on Free plan without a disk)
+  // Auto-apply LICENSE_TOKEN on boot (works on Free plan without a disk)
   try {
     const tok = cleanToken(process.env.LICENSE_TOKEN || '');
     if (tok) {
@@ -383,5 +378,4 @@ app.listen(PORT, '0.0.0.0', () => {
   } catch (e) {
     console.error('[license] auto-apply error:', e.message);
   }
-
 });
