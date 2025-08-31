@@ -64,8 +64,23 @@ router.post('/pin/set', express.json(), async (req, res) => {
 router.post('/pin/verify', express.json(), async (req, res) => {
   const { player_id, name, pin } = req.body || {};
   const players = await loadPlayers();
-  const p = players.find(u => (player_id && asId(u.id) === asId(player_id)) || (name && u.name === name));
-  if (!p) return res.status(404).json({ error: 'player not found' });
+// Robust lookup: by id if provided, otherwise name (case/space insensitive)
+const norm = s => String(s || '')
+  .normalize('NFKC')
+  .trim()
+  .replace(/\s+/g, ' ')
+  .toLowerCase();
+
+let p = null;
+if (player_id) {
+  p = players.find(u => asId(u.id) === asId(player_id));
+}
+if (!p && name) {
+  const needle = norm(name);
+  p = players.find(u => norm(u.name) === needle);
+}
+if (!p) return res.status(404).json({ error: 'player not found' });
+
 
   // Back-compat: migrate on first successful verify
   if (p.pin && String(pin) === String(p.pin)) {
