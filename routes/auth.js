@@ -4,9 +4,10 @@ const path = require('path');
 const { readFile } = require('fs/promises');
 const bcrypt = require('bcryptjs');
 const { writeJsonAtomic } = require('../utils/atomicJson');
+const { DATA_DIR } = require('../lib/paths'); // ✅ use the central data dir
 
 const router = express.Router();
-const PLAYERS = path.join(__dirname, '..', 'data', 'players.json');
+const PLAYERS = path.join(DATA_DIR, 'players.json'); // ✅ point to DATA_DIR
 
 async function loadPlayers() {
   try { return JSON.parse(await readFile(PLAYERS, 'utf8')); }
@@ -91,7 +92,7 @@ router.post('/pin/verify', express.json(), async (req, res) => {
     delete p.pin;
     p.pin_updated_at = new Date().toISOString();
     await savePlayers(players);
-    setWhoamiCookies(res, p); // <-- NEW
+    setWhoamiCookies(res, p); // NEW
     return res.json({ ok: true, id: p.id, name: p.name });
   }
 
@@ -100,7 +101,7 @@ router.post('/pin/verify', express.json(), async (req, res) => {
   if (!ok) return res.status(401).json({ error: 'invalid PIN' });
 
   // success
-  setWhoamiCookies(res, p); // <-- NEW
+  setWhoamiCookies(res, p); // NEW
   return res.json({ ok: true, id: p.id, name: p.name });
 });
 
