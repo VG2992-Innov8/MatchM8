@@ -1,4 +1,6 @@
-// routes/admin.js — cleaned, secured, and extended with Players CRUD
+// routes/admin.js — cleaned, secured, and tenant-aware Players CRUD
+
+const { readJSON, writeJSON } = require('../lib/storage');
 
 const express = require('express');
 const router = express.Router();
@@ -9,7 +11,7 @@ const fsp = require('fs/promises');       // async FS
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 
-const { DATA_DIR } = require('../lib/paths');            // central data dir
+const { DATA_DIR } = require('../lib/paths');            // still used for fixtures/results/etc
 let { writeJsonAtomic } = require('../utils/atomicJson'); // optional helper
 if (typeof writeJsonAtomic !== 'function') {
   // safe fallback if utils/atomicJson is absent
@@ -43,26 +45,9 @@ router.use((req, res, next) => {
 /* ================================================
    Helpers (paths, IO, CSV)
    ================================================ */
-const PLAYERS_PATH = path.join(DATA_DIR, 'players.json');
 
-async function ensureDirFor(filePath) {
-  await fsp.mkdir(path.dirname(filePath), { recursive: true }).catch(() => {});
-}
-
-async function readPlayers() {
-  try {
-    const txt = await fsp.readFile(PLAYERS_PATH, 'utf8');
-    const arr = JSON.parse(txt);
-    return Array.isArray(arr) ? arr : [];
-  } catch {
-    return [];
-  }
-}
-
-async function writePlayers(players) {
-  await ensureDirFor(PLAYERS_PATH);
-  await writeJsonAtomic(PLAYERS_PATH, players);
-}
+// NOTE: For multi-tenant migration we only switched PLAYERS to req.ctx.*
+// The rest (fixtures/results/predictions/scores) still use global DATA_DIR for now.
 
 function readJsonSync(p, fb = null) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); }
@@ -143,13 +128,22 @@ function parseCsvTolerant(text) {
 }
 
 /* ================================================
-   Players API (mounted under /api/admin)
+   Players API (mounted under /api/admin) — TENANT-AWARE
    ================================================ */
 
+// Internal helpers (tenant-aware)
+async function readPlayers(req) {
+  const arr = readJSON(req, 'players.json', []);
+  return Array.isArray(arr) ? arr : [];
+}
+async function writePlayers(req, players) {
+  writeJSON(req, 'players.json', players);
+}
+
 // GET /players — safe list (no PINs)
-router.get('/players', async (_req, res) => {
+router.get('/players', async (req, res) => {
   try {
-    const players = await readPlayers();
+    const players = await readPlayers(req);
     res.json(players.map(p => ({
       id: p.id,
       name: p.name,
@@ -157,15 +151,19 @@ router.get('/players', async (_req, res) => {
       has_pin: !!p.pin_hash,
       pin_updated_at: p.pin_updated_at || null
     })));
-  } catch { res.status(500).json({ error: 'server_error' }); }
+  } catch {
+    res.status(500).json({ error: 'server_error' });
+  }
 });
 
 // GET /players/count — total number (return a number)
-router.get('/players/count', async (_req, res) => {
+router.get('/players/count', async (req, res) => {
   try {
-    const players = await readPlayers();
+    const players = await readPlayers(req);
     res.json(players.length);
-  } catch { res.status(500).json({ error: 'server_error' }); }
+  } catch {
+    res.status(500).json({ error: 'server_error' });
+  }
 });
 
 // POST /players — { name, email?, pin? } (pin optional; hashed)
@@ -175,20 +173,26 @@ router.post('/players', async (req, res) => {
     if (!name || typeof name !== 'string' || !name.trim()) {
       return res.status(400).json({ error: 'name_required' });
     }
-    const players = await readPlayers();
-    const id = (crypto.randomUUID && crypto.randomUUID()) || `p-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`;
+    const players = await readPlayers(req);
+    const id = (crypto.randomUUID && crypto.randomUUID()) ||
+               `p-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`;
     const rec = { id, name: name.trim(), email: String(email || '') || undefined };
     if (pin && String(pin).length >= 4) {
       rec.pin_hash = await bcrypt.hash(String(pin), 10);
       rec.pin_updated_at = new Date().toISOString();
     }
     players.push(rec);
-    await writePlayers(players);
+    await writePlayers(req, players);
     return res.json({
       ok: true,
-      player: { id: rec.id, name: rec.name, email: rec.email || '', has_pin: !!rec.pin_hash, pin_updated_at: rec.pin_updated_at || null }
+      player: {
+        id: rec.id, name: rec.name, email: rec.email || '',
+        has_pin: !!rec.pin_hash, pin_updated_at: rec.pin_updated_at || null
+      }
     });
-  } catch { res.status(500).json({ error: 'server_error' }); }
+  } catch {
+    res.status(500).json({ error: 'server_error' });
+  }
 });
 
 // PUT /players/:id — { name?, email?, new_pin?, clear_pin? }
@@ -196,7 +200,7 @@ router.put('/players/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { name, email, new_pin, clear_pin } = req.body || {};
-    const players = await readPlayers();
+    const players = await readPlayers(req);
     const idx = players.findIndex(p => String(p.id) === String(id));
     if (idx < 0) return res.status(404).json({ error: 'player_not_found' });
 
@@ -214,26 +218,30 @@ router.put('/players/:id', async (req, res) => {
       players[idx].pin_updated_at = new Date().toISOString();
     }
 
-    await writePlayers(players);
+    await writePlayers(req, players);
     const p = players[idx];
     return res.json({
       ok: true,
       player: { id: p.id, name: p.name, email: p.email || '', has_pin: !!p.pin_hash, pin_updated_at: p.pin_updated_at || null }
     });
-  } catch { res.status(500).json({ error: 'server_error' }); }
+  } catch {
+    res.status(500).json({ error: 'server_error' });
+  }
 });
 
 // DELETE /players/:id
 router.delete('/players/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const players = await readPlayers();
+    const players = await readPlayers(req);
     const idx = players.findIndex(p => String(p.id) === String(id));
     if (idx < 0) return res.status(404).json({ error: 'player_not_found' });
     const [removed] = players.splice(idx, 1);
-    await writePlayers(players);
+    await writePlayers(req, players);
     return res.json({ ok: true, removed: { id: removed.id, name: removed.name, email: removed.email || '' } });
-  } catch { res.status(500).json({ error: 'server_error' }); }
+  } catch {
+    res.status(500).json({ error: 'server_error' });
+  }
 });
 
 // POST /players/pin/reset — { player_id?, name?, new_pin }
@@ -241,16 +249,18 @@ router.post('/players/pin/reset', async (req, res) => {
   try {
     const { player_id, name, new_pin } = req.body || {};
     if (!new_pin || String(new_pin).length < 4) return res.status(400).json({ error: 'PIN must be >= 4 digits' });
-    const players = await readPlayers();
+    const players = await readPlayers(req);
     const idx = players.findIndex(p =>
       (player_id && String(p.id) === String(player_id)) || (name && p.name === name)
     );
     if (idx < 0) return res.status(404).json({ error: 'player_not_found' });
     players[idx].pin_hash = await bcrypt.hash(String(new_pin), 10);
     players[idx].pin_updated_at = new Date().toISOString();
-    await writePlayers(players);
+    await writePlayers(req, players);
     res.json({ ok: true, id: players[idx].id, name: players[idx].name });
-  } catch { res.status(500).json({ error: 'server_error' }); }
+  } catch {
+    res.status(500).json({ error: 'server_error' });
+  }
 });
 
 /* ========================= Fixtures & Results ========================= */
@@ -426,9 +436,9 @@ router.get('/scores/download', (_req, res) => {
 
 /* ========================= Players export/import ========================= */
 
-router.get('/players/download', async (_req, res) => {
+router.get('/players/download', async (req, res) => {
   try {
-    const arr = await readPlayers();
+    const arr = await readPlayers(req);
     const rows = arr.map(pl => ({
       id: pl.id, name: pl.name || '', email: pl.email || '', has_pin: !!pl.pin_hash, pin_updated_at: pl.pin_updated_at || ''
     })); // do NOT export PINs
@@ -447,7 +457,8 @@ router.post('/players/upload', async (req, res) => {
 
     const out = [];
     for (const r of rows) {
-      const rec = { id: r.id, name: r.name || '', email: r.email || '' };
+      const rec = { id: r.id || (r.name ? `p-${r.name.toLowerCase().replace(/\s+/g,'-')}` : undefined),
+                    name: r.name || '', email: r.email || '' };
       if (r.pin && String(r.pin).length >= 4) {
         rec.pin_hash = await bcrypt.hash(String(r.pin), 10);
         rec.pin_updated_at = new Date().toISOString();
@@ -455,8 +466,7 @@ router.post('/players/upload', async (req, res) => {
       out.push(rec);
     }
 
-    await ensureDirFor(PLAYERS_PATH);
-    await writeJsonAtomic(PLAYERS_PATH, out);
+    await writePlayers(req, out);
     return res.json({ ok: true, imported: out.length, hashed: out.filter(p => p.pin_hash).length });
   } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
 });
