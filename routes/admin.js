@@ -1,4 +1,4 @@
-// routes/admin.js — cleaned, secured, and tenant-aware Players CRUD
+// routes/admin.js — cleaned, secured, and tenant-aware Players + Fixtures/Results
 
 const { readJSON, writeJSON } = require('../lib/storage');
 
@@ -11,7 +11,7 @@ const fsp = require('fs/promises');       // async FS
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 
-const { DATA_DIR } = require('../lib/paths');            // still used for fixtures/results/etc
+const { DATA_DIR } = require('../lib/paths');            // still used for predictions/scores (next step)
 let { writeJsonAtomic } = require('../utils/atomicJson'); // optional helper
 if (typeof writeJsonAtomic !== 'function') {
   // safe fallback if utils/atomicJson is absent
@@ -46,8 +46,17 @@ router.use((req, res, next) => {
    Helpers (paths, IO, CSV)
    ================================================ */
 
-// NOTE: For multi-tenant migration we only switched PLAYERS to req.ctx.*
-// The rest (fixtures/results/predictions/scores) still use global DATA_DIR for now.
+// tenant-aware config (so season can be stored per-tenant)
+function readTenantConfig(req) {
+  try {
+    const p = path.join(req.ctx.dataDir, 'config.json');
+    const raw = fs.readFileSync(p, 'utf8');
+    const cfg = JSON.parse(raw);
+    return { season: 2025, ...cfg };
+  } catch {
+    return { season: 2025 };
+  }
+}
 
 function readJsonSync(p, fb = null) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); }
@@ -263,44 +272,70 @@ router.post('/players/pin/reset', async (req, res) => {
   }
 });
 
-/* ========================= Fixtures & Results ========================= */
+/* ========================= Fixtures & Results (TENANT-AWARE) ========================= */
 
-// 1) Import fixtures
-router.post('/fixtures/import', (req, res) => {
+// 0) Helper to build tenant paths
+function fixturesPath(req, season, week) {
+  return path.join(req.ctx.dataDir, 'fixtures', `season-${season}`, `week-${week}.json`);
+}
+function resultsPath(req, week) {
+  return path.join(req.ctx.dataDir, 'results', `week-${week}.json`);
+}
+
+// Admin GET fixtures for a week (tenant)
+router.get('/fixtures', (req, res) => {
   try {
-    const { week, fixtures } = req.body || {};
-    if (!week || !Array.isArray(fixtures)) return res.status(400).json({ ok: false, error: 'week and fixtures[] required' });
-    const fixturesPath = path.join(DATA_DIR, 'fixtures', 'season-2025', `week-${week}.json`);
-    fs.mkdirSync(path.dirname(fixturesPath), { recursive: true });
-    fs.writeFileSync(fixturesPath, JSON.stringify(fixtures, null, 2), 'utf8');
-    return res.json({ ok: true, saved: fixtures.length });
+    const cfg = readTenantConfig(req);
+    const week = Math.max(1, parseInt(req.query.week, 10) || 1);
+    const season = parseInt(req.query.season, 10) || cfg.season || 2025;
+    const p = fixturesPath(req, season, week);
+    const arr = readJsonSync(p, []);
+    return res.json({ ok: true, season, week, fixtures: Array.isArray(arr) ? arr : [] });
   } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
 });
 
-// 2) Save results
+// Import fixtures (tenant)
+router.post('/fixtures/import', (req, res) => {
+  try {
+    const cfg = readTenantConfig(req);
+    const { week, fixtures, season } = req.body || {};
+    const wk = Math.max(1, parseInt(week, 10) || 0);
+    const ssn = parseInt(season, 10) || cfg.season || 2025;
+    if (!wk || !Array.isArray(fixtures)) {
+      return res.status(400).json({ ok: false, error: 'week and fixtures[] required' });
+    }
+    const p = fixturesPath(req, ssn, wk);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, JSON.stringify(fixtures, null, 2), 'utf8');
+    return res.json({ ok: true, saved: fixtures.length, season: ssn, week: wk });
+  } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Save results (tenant)
 router.post('/results', (req, res) => {
   try {
     const { week, results } = req.body || {};
-    if (!week || typeof results !== 'object') return res.status(400).json({ ok: false, error: 'week and results{} required' });
-    const p = path.join(DATA_DIR, 'results', `week-${week}.json`);
+    const wk = Math.max(1, parseInt(week, 10) || 0);
+    if (!wk || typeof results !== 'object') return res.status(400).json({ ok: false, error: 'week and results{} required' });
+    const p = resultsPath(req, wk);
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, JSON.stringify(results, null, 2), 'utf8');
-    return res.json({ ok: true });
+    return res.json({ ok: true, week: wk });
   } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
 });
 
-// 3) Get results
+// Get results (tenant)
 router.get('/results', (req, res) => {
   try {
-    const { week } = req.query;
-    if (!week) return res.status(400).json({ ok: false, error: 'week required' });
-    const p = path.join(DATA_DIR, 'results', `week-${week}.json`);
+    const wk = Math.max(1, parseInt(req.query.week, 10) || 0);
+    if (!wk) return res.status(400).json({ ok: false, error: 'week required' });
+    const p = resultsPath(req, wk);
     const obj = readJsonSync(p, {});
-    return res.json({ ok: true, results: obj });
+    return res.json({ ok: true, week: wk, results: obj });
   } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
 });
 
-/* ========================= Predictions CSV ========================= */
+/* ========================= Predictions CSV (GLOBAL for now) ========================= */
 
 router.post('/predictions/upload', async (req, res) => {
   try {
@@ -385,7 +420,7 @@ router.get('/predictions/download', (req, res) => {
   } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
 });
 
-/* ========================= Scores CSV ========================= */
+/* ========================= Scores CSV (GLOBAL for now) ========================= */
 
 router.post('/scores/upload', (req, res) => {
   try {
@@ -434,7 +469,7 @@ router.get('/scores/download', (_req, res) => {
   } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
 });
 
-/* ========================= Players export/import ========================= */
+/* ========================= Players export/import (TENANT-AWARE) ========================= */
 
 router.get('/players/download', async (req, res) => {
   try {
@@ -475,12 +510,13 @@ router.post('/players/upload', async (req, res) => {
 
 router.get('/health', (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 
+// TENANT-AWARE wipe
 router.post('/wipe/week', (req, res) => {
   try {
     const { week } = req.body || {};
     if (!week) return res.status(400).json({ ok: false, error: 'week required' });
-    const preds = path.join(DATA_DIR, 'predictions', `week-${week}.json`);
-    const results = path.join(DATA_DIR, 'results', `week-${week}.json`);
+    const preds = path.join(DATA_DIR, 'predictions', `week-${week}.json`); // (still global until predictions are migrated)
+    const results = path.join(req.ctx.dataDir, 'results', `week-${week}.json`);
     if (fs.existsSync(preds)) fs.unlinkSync(preds);
     if (fs.existsSync(results)) fs.unlinkSync(results);
     return res.json({ ok: true, week });
