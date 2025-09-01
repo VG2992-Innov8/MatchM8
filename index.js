@@ -31,20 +31,22 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const cookieParser = require('cookie-parser');
 const crypto = require('crypto');
-const fetchFn = (...args) => import('node-fetch').then(({default: f}) => f(...args)).catch(() => fetch(...args)); // Node18+ or node-fetch polyfill
+// node-fetch polyfill (optional)
+const fetchFn = (...args) =>
+  import('node-fetch').then(({ default: f }) => f(...args)).catch(() => fetch(...args));
+
 const { DATA_DIR } = require('./lib/paths'); // central data dir (reads env DATA_DIR or ./data)
 
-// -------------------- Per-request TENANT context (no extra files needed) --------------------
-/**
+/* -------------------- Per-request TENANT context --------------------
  * TENANT selection rules (in priority order):
  * 1) TENANT_MAP JSON env maps request hostname -> tenant slug
- * 2) TENANT env fallback (lets you run without DNS/subdomains)
- * 3) 'default'
+ * 2) ALLOW_TENANT_OVERRIDE=true lets you pass ?t=TENANT or header x-tenant: TENANT (handy on one URL)
+ * 3) TENANT env fallback (lets you run without DNS/subdomains)
+ * 4) 'default'
  *
  * Data for each request is isolated under:  <BASE_DATA_DIR>/tenants/<TENANT>/
- * We only set req.ctx.{tenant,dataDir} here; routers can start using it later.
+ * We set req.ctx = { tenant, dataDir } for any downstream routes.
  */
-// Per-request TENANT context with optional override
 const BASE_DATA_DIR = process.env.DATA_DIR;
 
 function parseTenantMap() {
@@ -70,8 +72,8 @@ function resolveTenant(req) {
 function tenantMiddleware(req, _res, next) {
   try {
     const tenant = resolveTenant(req);
-    const dataDir = require('path').join(BASE_DATA_DIR, 'tenants', tenant);
-    require('fs').mkdirSync(dataDir, { recursive: true });
+    const dataDir = path.join(BASE_DATA_DIR, 'tenants', tenant);
+    fs.mkdirSync(dataDir, { recursive: true });
     req.ctx = { tenant, dataDir };
   } catch {
     req.ctx = { tenant: process.env.TENANT || 'default', dataDir: BASE_DATA_DIR };
@@ -79,20 +81,7 @@ function tenantMiddleware(req, _res, next) {
   next();
 }
 
-// Public READ results (tenant-aware)
-app.get('/api/results', (req, res) => {
-  try {
-    const wk = Math.max(1, parseInt(req.query.week, 10) || 1);
-    const p = require('path').join(req.ctx.dataDir, 'results', `week-${wk}.json`);
-    let obj = {};
-    try { obj = JSON.parse(require('fs').readFileSync(p, 'utf8')); } catch {}
-    res.json({ ok: true, week: wk, results: obj });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: String(e) });
-  }
-});
-
-// Ensure data dir exists + common subdirs; optionally seed demo content once.
+// Ensure data dir exists + common subdirs; optionally seed demo content once (global path).
 function ensureDataDirsAndSeed() {
   const subdirs = [
     '.', 'fixtures', 'results', 'predictions',
@@ -119,6 +108,7 @@ function ensureDataDirsAndSeed() {
 }
 ensureDataDirsAndSeed();
 
+// ----- App setup -----
 const app = express();
 app.set('trust proxy', 1); // ✅ for Render/Railway/any proxy
 const PORT = process.env.PORT || 3000; // ✅ use platform port if provided
@@ -137,7 +127,7 @@ const DEFAULT_CONFIG = {
   timezone: 'Australia/Melbourne',
 };
 
-// helpers to read/write config.json safely
+// helpers to read/write config.json safely (global config)
 function readConfig() {
   try {
     const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
@@ -175,7 +165,7 @@ license.loadAndValidate().then(s => {
 });
 
 // Simple license gate middleware (no demo/bypass)
-function requireValidLicense(req, res, next) {
+function requireValidLicense(_req, res, next) {
   const s = license.getStatus();
   if (!s.ok) return res.status(403).json({ error: 'License invalid: ' + s.reason });
   next();
@@ -224,6 +214,19 @@ app.get('/api/__meta', (req, res) => {
     dataDir: req.ctx?.dataDir || DATA_DIR,
     appTitle: process.env.APP_TITLE || 'MatchM8'
   });
+});
+
+// ✅ Public READ results (tenant-aware) — moved *after* app + middleware init
+app.get('/api/results', (req, res) => {
+  try {
+    const wk = Math.max(1, parseInt(req.query.week, 10) || 1);
+    const p = path.join(req.ctx.dataDir, 'results', `week-${wk}.json`);
+    let obj = {};
+    try { obj = JSON.parse(fs.readFileSync(p, 'utf8')); } catch {}
+    res.json({ ok: true, week: wk, results: obj });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
 });
 
 // Static assets (global; safe to keep while we migrate routers to req.ctx)
@@ -414,7 +417,7 @@ app.get('/api/__health', (req, res) =>
     mounted,
     mode: APP_MODE,
     dataDir_global: DATA_DIR,         // current global
-    tenant: req.ctx?.tenant || null,  // new: per-request
+    tenant: req.ctx?.tenant || null,  // per-request
     dataDir_request: req.ctx?.dataDir || null
   })
 );
