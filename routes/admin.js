@@ -1,4 +1,4 @@
-// routes/admin.js — cleaned, secured, and tenant-aware Players + Fixtures/Results
+// routes/admin.js — tenant-aware Players + Fixtures/Results + Predictions/Scores
 
 const { readJSON, writeJSON } = require('../lib/storage');
 
@@ -11,7 +11,6 @@ const fsp = require('fs/promises');       // async FS
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 
-const { DATA_DIR } = require('../lib/paths');            // still used for predictions/scores (next step)
 let { writeJsonAtomic } = require('../utils/atomicJson'); // optional helper
 if (typeof writeJsonAtomic !== 'function') {
   // safe fallback if utils/atomicJson is absent
@@ -137,7 +136,7 @@ function parseCsvTolerant(text) {
 }
 
 /* ================================================
-   Players API (mounted under /api/admin) — TENANT-AWARE
+   Players API (TENANT-AWARE)
    ================================================ */
 
 // Internal helpers (tenant-aware)
@@ -335,7 +334,7 @@ router.get('/results', (req, res) => {
   } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
 });
 
-/* ========================= Predictions CSV (GLOBAL for now) ========================= */
+/* ========================= Predictions CSV (TENANT-AWARE) ========================= */
 
 router.post('/predictions/upload', async (req, res) => {
   try {
@@ -349,8 +348,8 @@ router.post('/predictions/upload', async (req, res) => {
     const missing = need.filter(k => !header.includes(k));
     if (missing.length) return res.status(400).json({ error: 'bad_header', missing });
 
-    const fpath = path.join(DATA_DIR, 'predictions', `week-${wk}.json`);
-    let existing = readJsonSync(fpath, {});
+    const rel = path.join('predictions', `week-${wk}.json`);
+    let existing = readJSON(req, rel, {});
     if (Array.isArray(existing)) {
       const conv = {};
       for (const r of existing) if (r && r.player_id) conv[String(r.player_id)] = r;
@@ -381,7 +380,7 @@ router.post('/predictions/upload', async (req, res) => {
       imported++;
     }
 
-    writeJsonSync(fpath, existing);
+    writeJSON(req, rel, existing);
     return res.json({ ok: true, week: wk, imported, total_players: Object.keys(existing).length });
   } catch (e) {
     console.error('upload predictions error:', e);
@@ -394,8 +393,8 @@ router.get('/predictions/download', (req, res) => {
     const { week } = req.query;
     if (!week) return res.status(400).json({ ok: false, error: 'week required' });
 
-    const p = path.join(DATA_DIR, 'predictions', `week-${week}.json`);
-    let data = readJsonSync(p, {});
+    const rel = path.join('predictions', `week-${week}.json`);
+    let data = readJSON(req, rel, {});
 
     if (Array.isArray(data)) {
       const m = {};
@@ -420,7 +419,7 @@ router.get('/predictions/download', (req, res) => {
   } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
 });
 
-/* ========================= Scores CSV (GLOBAL for now) ========================= */
+/* ========================= Scores CSV (TENANT-AWARE) ========================= */
 
 router.post('/scores/upload', (req, res) => {
   try {
@@ -428,7 +427,7 @@ router.post('/scores/upload', (req, res) => {
     if (!csv) return res.status(400).json({ ok: false, error: 'csv required' });
 
     const rows = parseCsv(csv);
-    const outPath = path.join(DATA_DIR, 'scores', `season-totals.json`);
+    const rel = path.join('scores', `season-totals.json`);
     const map = {};
 
     for (const r of rows) {
@@ -441,16 +440,15 @@ router.post('/scores/upload', (req, res) => {
       };
     }
 
-    fs.mkdirSync(path.dirname(outPath), { recursive: true });
-    fs.writeFileSync(outPath, JSON.stringify(map, null, 2), 'utf8');
+    writeJSON(req, rel, map);
     return res.json({ ok: true, imported: Object.keys(map).length });
   } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
 });
 
-router.get('/scores/download', (_req, res) => {
+router.get('/scores/download', (req, res) => {
   try {
-    const p = path.join(DATA_DIR, 'scores', `season-totals.json`);
-    const data = readJsonSync(p, {});
+    const rel = path.join('scores', `season-totals.json`);
+    const data = readJSON(req, rel, {});
     const rows = [];
 
     for (const [player_id, val] of Object.entries(data)) {
@@ -515,7 +513,7 @@ router.post('/wipe/week', (req, res) => {
   try {
     const { week } = req.body || {};
     if (!week) return res.status(400).json({ ok: false, error: 'week required' });
-    const preds = path.join(DATA_DIR, 'predictions', `week-${week}.json`); // (still global until predictions are migrated)
+    const preds = path.join(req.ctx.dataDir, 'predictions', `week-${week}.json`);
     const results = path.join(req.ctx.dataDir, 'results', `week-${week}.json`);
     if (fs.existsSync(preds)) fs.unlinkSync(preds);
     if (fs.existsSync(results)) fs.unlinkSync(results);
