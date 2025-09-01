@@ -41,6 +41,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
+  
   // Handle player selection
   playerSelect.addEventListener('change', () => {
     selectedPlayer = playerSelect.value || null;
@@ -96,6 +97,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
     });
 
+    
     // Week could come from querystring or a field; adapt as needed
     const week = Number(new URLSearchParams(location.search).get('week')) || 1;
 

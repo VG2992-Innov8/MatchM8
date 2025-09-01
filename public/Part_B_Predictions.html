@@ -31,6 +31,30 @@
       font-variant-numeric:tabular-nums;
       display:inline-block;
     }
+
+    /* --- Predictions row layout --- */
+.match-grid {
+  display: grid;
+  grid-template-columns:
+    28px                         /* index  */
+    minmax(160px, 1fr)           /* home team name */
+    56px 14px 56px               /* home pred, dash, away pred */
+    24px                         /* spacer */
+    56px 14px 56px               /* home result, dash, away result */
+    auto;                        /* lock/status */
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.match-grid .idx { text-align: right; opacity: .8; }
+.match-grid .dash { text-align: center; opacity: .7; }
+.match-grid input.pred, .match-grid input.res {
+  width: 56px; text-align: center;
+  padding: 6px 8px;
+}
+.match-grid .team { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
   </style>
 </head>
 <body>

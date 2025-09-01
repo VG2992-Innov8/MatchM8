@@ -44,28 +44,53 @@ const { DATA_DIR } = require('./lib/paths'); // central data dir (reads env DATA
  * Data for each request is isolated under:  <BASE_DATA_DIR>/tenants/<TENANT>/
  * We only set req.ctx.{tenant,dataDir} here; routers can start using it later.
  */
-const BASE_DATA_DIR = process.env.DATA_DIR; // global base; per-tenant lives under this
+// Per-request TENANT context with optional override
+const BASE_DATA_DIR = process.env.DATA_DIR;
+
 function parseTenantMap() {
   try { return JSON.parse(process.env.TENANT_MAP || '{}'); }
   catch { return {}; }
 }
-function tenantFromHost(host) {
-  const h = (host || '').split(':')[0].toLowerCase();
+function sanitizeSlug(s) { return String(s || '').replace(/[^A-Za-z0-9._-]/g, '_'); }
+
+function resolveTenant(req) {
   const map = parseTenantMap();
-  return map[h] || process.env.TENANT || 'default';
+  const host = (req.headers['x-forwarded-host'] || req.hostname || '')
+    .split(':')[0].toLowerCase();
+
+  let t = map[host];
+
+  // Optional override for testing without DNS
+  if (!t && process.env.ALLOW_TENANT_OVERRIDE === 'true') {
+    t = req.query.t || req.get('x-tenant');
+  }
+  return sanitizeSlug(t || process.env.TENANT || 'default');
 }
+
 function tenantMiddleware(req, _res, next) {
   try {
-    const tenant = tenantFromHost(req.hostname);
-    const dataDir = path.join(BASE_DATA_DIR, 'tenants', tenant);
-    fs.mkdirSync(dataDir, { recursive: true });
+    const tenant = resolveTenant(req);
+    const dataDir = require('path').join(BASE_DATA_DIR, 'tenants', tenant);
+    require('fs').mkdirSync(dataDir, { recursive: true });
     req.ctx = { tenant, dataDir };
-  } catch (e) {
-    // Fall back to global if anything odd happens — keeps current app behavior
+  } catch {
     req.ctx = { tenant: process.env.TENANT || 'default', dataDir: BASE_DATA_DIR };
   }
   next();
 }
+
+// Public READ results (tenant-aware)
+app.get('/api/results', (req, res) => {
+  try {
+    const wk = Math.max(1, parseInt(req.query.week, 10) || 1);
+    const p = require('path').join(req.ctx.dataDir, 'results', `week-${wk}.json`);
+    let obj = {};
+    try { obj = JSON.parse(require('fs').readFileSync(p, 'utf8')); } catch {}
+    res.json({ ok: true, week: wk, results: obj });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
 
 // Ensure data dir exists + common subdirs; optionally seed demo content once.
 function ensureDataDirsAndSeed() {
