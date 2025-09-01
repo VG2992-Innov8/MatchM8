@@ -1,4 +1,4 @@
-// index.js — MatchM8 server (prod-ready with ephemeral fallback + seeding)
+// index.js — MatchM8 server (prod-ready with ephemeral fallback + seeding + per-request tenant meta)
 const path = require('path');
 const fs = require('fs');
 
@@ -33,6 +33,39 @@ const cookieParser = require('cookie-parser');
 const crypto = require('crypto');
 const fetchFn = (...args) => import('node-fetch').then(({default: f}) => f(...args)).catch(() => fetch(...args)); // Node18+ or node-fetch polyfill
 const { DATA_DIR } = require('./lib/paths'); // central data dir (reads env DATA_DIR or ./data)
+
+// -------------------- Per-request TENANT context (no extra files needed) --------------------
+/**
+ * TENANT selection rules (in priority order):
+ * 1) TENANT_MAP JSON env maps request hostname -> tenant slug
+ * 2) TENANT env fallback (lets you run without DNS/subdomains)
+ * 3) 'default'
+ *
+ * Data for each request is isolated under:  <BASE_DATA_DIR>/tenants/<TENANT>/
+ * We only set req.ctx.{tenant,dataDir} here; routers can start using it later.
+ */
+const BASE_DATA_DIR = process.env.DATA_DIR; // global base; per-tenant lives under this
+function parseTenantMap() {
+  try { return JSON.parse(process.env.TENANT_MAP || '{}'); }
+  catch { return {}; }
+}
+function tenantFromHost(host) {
+  const h = (host || '').split(':')[0].toLowerCase();
+  const map = parseTenantMap();
+  return map[h] || process.env.TENANT || 'default';
+}
+function tenantMiddleware(req, _res, next) {
+  try {
+    const tenant = tenantFromHost(req.hostname);
+    const dataDir = path.join(BASE_DATA_DIR, 'tenants', tenant);
+    fs.mkdirSync(dataDir, { recursive: true });
+    req.ctx = { tenant, dataDir };
+  } catch (e) {
+    // Fall back to global if anything odd happens — keeps current app behavior
+    req.ctx = { tenant: process.env.TENANT || 'default', dataDir: BASE_DATA_DIR };
+  }
+  next();
+}
 
 // Ensure data dir exists + common subdirs; optionally seed demo content once.
 function ensureDataDirsAndSeed() {
@@ -151,11 +184,24 @@ app.use(cookieParser());
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false }));
 
+// 🔑 Per-request TENANT context (enable now; routers can adopt later)
+app.use(tenantMiddleware);
+
 // Health (Render/Railway)
 app.get('/health', (_req, res) => res.json({ ok: true, mode: APP_MODE, ts: Date.now() }));
 app.get('/healthz', (_req, res) => res.status(200).send('ok')); // legacy/simple
 
-// Static assets
+// Quick meta to see which tenant/folder this request is pointing at
+app.get('/api/__meta', (req, res) => {
+  res.json({
+    ok: true,
+    tenant: req.ctx?.tenant || (process.env.TENANT || 'default'),
+    dataDir: req.ctx?.dataDir || DATA_DIR,
+    appTitle: process.env.APP_TITLE || 'MatchM8'
+  });
+});
+
+// Static assets (global; safe to keep while we migrate routers to req.ctx)
 app.use('/data/scores', express.static(joinData('scores')));
 app.use('/data/fixtures', express.static(joinData('fixtures')));
 app.use(express.static(joinRepo('public')));
@@ -214,7 +260,7 @@ if (fixtures.ok) {
   mount('./routes/fixtures.js', '/api/fixtures', fixtures.mod);
   mount('./routes/fixtures.js', '/fixtures', fixtures.mod);
 } else {
-  // Fallback public fixtures: returns plain array for week
+  // Fallback public fixtures: returns plain array for week (global DATA_DIR for now)
   app.get('/api/fixtures', (req, res) => {
     const cfg = readConfig();
     const week = Math.max(1, parseInt(req.query.week, 10) || 1);
@@ -337,8 +383,15 @@ if (admin.ok) {
 }
 
 /* -------------------- Diagnostics -------------------- */
-app.get('/api/__health', (_req, res) =>
-  res.json({ ok: true, mounted, mode: APP_MODE, dataDir: DATA_DIR })
+app.get('/api/__health', (req, res) =>
+  res.json({
+    ok: true,
+    mounted,
+    mode: APP_MODE,
+    dataDir_global: DATA_DIR,         // current global
+    tenant: req.ctx?.tenant || null,  // new: per-request
+    dataDir_request: req.ctx?.dataDir || null
+  })
 );
 app.get('/api/__routes', (_req, res) => res.json(mounted));
 
@@ -360,7 +413,7 @@ app.get('/', (_req, res) => res.sendFile(joinRepo('public', 'Part_A_PIN.html')))
 /* -------------------- Listen -------------------- */
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`MatchM8 listening on port ${PORT} (mode=${APP_MODE})`);
-  console.log(`DATA_DIR = ${DATA_DIR}`);
+  console.log(`DATA_DIR (global) = ${DATA_DIR}`);
 
   // Auto-apply LICENSE_TOKEN on boot (works on Free plan without a disk)
   try {
