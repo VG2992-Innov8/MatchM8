@@ -1,10 +1,12 @@
-// routes/predictions.js — map storage + server-side locking (first_kickoff / per_match)
+// routes/predictions.js — per-tenant storage + server-side locking (first_kickoff / per_match)
 
 const express = require('express');
 const path = require('path');
 const fsp = require('fs/promises');
 const fs = require('fs');
-const { DATA_DIR } = require('../lib/paths');
+
+// ⬇ tenant-aware helpers + legacy base for fallbacks
+const { BASE_DATA_DIR, joinData, ensureDirForFile } = require('../lib/tenant');
 
 const router = express.Router();
 router.use(express.json());
@@ -64,17 +66,11 @@ if (typeof computeLockStatus !== 'function') {
   };
 }
 
-// ---------- Paths & helpers ----------
-const DATA    = DATA_DIR;
-const PREDDIR = path.join(DATA, 'predictions');
-const CONFIG  = path.join(DATA, 'config.json');
-
-const weekFile = (dir, w) => path.join(dir, `week-${w}.json`);
-
+// ---------- Helpers (I/O, config, shapes) ----------
 async function readJson(file, fb) { try { return JSON.parse(await fsp.readFile(file, 'utf8')); } catch { return fb; } }
 async function writeJson(file, obj) { await fsp.mkdir(path.dirname(file), { recursive: true }); await fsp.writeFile(file, JSON.stringify(obj, null, 2)); }
 
-function loadConfigSync() {
+function loadConfigSync(req) {
   const defaults = {
     season: 2025,
     total_weeks: 38,
@@ -84,8 +80,12 @@ function loadConfigSync() {
     deadline_mode: 'first_kickoff',
     timezone: 'Australia/Melbourne',
   };
+  // Prefer per-tenant config if present; else legacy global config
+  const CONFIG_TENANT = joinData(req, 'config.json');
+  const CONFIG_LEGACY = path.join(BASE_DATA_DIR, 'config.json');
   try {
-    const raw = fs.readFileSync(CONFIG, 'utf8');
+    const fp = fs.existsSync(CONFIG_TENANT) ? CONFIG_TENANT : CONFIG_LEGACY;
+    const raw = fs.readFileSync(fp, 'utf8');
     return { ...defaults, ...JSON.parse(raw) };
   } catch {
     return defaults;
@@ -164,6 +164,39 @@ function firstKickoffUTC(fixtures) {
   return new Date(Math.min(...times)).toISOString();
 }
 
+// ---------- Path helpers (tenant-first, legacy fallback) ----------
+function weekFileTenant(req, w) {
+  return joinData(req, 'predictions', `week-${w}.json`);
+}
+function weekFileLegacy(w) {
+  return path.join(BASE_DATA_DIR, 'predictions', `week-${w}.json`);
+}
+
+async function readPredictionsMap(req, w) {
+  const fpTenant = weekFileTenant(req, w);
+  const fpLegacy = weekFileLegacy(w);
+  if (fs.existsSync(fpTenant)) return toMapShape(await readJson(fpTenant, {}));
+  if (fs.existsSync(fpLegacy)) return toMapShape(await readJson(fpLegacy, {}));
+  return {};
+}
+
+async function readFixturesForWeek(req, season, w) {
+  // Try per-tenant paths first
+  const baseT = joinData(req, 'fixtures', `season-${season}`);
+  const baseL = path.join(BASE_DATA_DIR, 'fixtures', `season-${season}`);
+  const candidates = [
+    path.join(baseT, `week-${w}.json`),
+    path.join(baseT, 'weeks', `week-${w}.json`),
+    path.join(baseL, `week-${w}.json`),
+    path.join(baseL, 'weeks', `week-${w}.json`),
+  ];
+  for (const fp of candidates) {
+    const data = await readJson(fp, null);
+    if (data) return data;
+  }
+  return [];
+}
+
 // ---------- Routes ----------
 
 // Always returns a MAP: { player_id: { player_id, predictions, submitted_at, email_sent_at }, ... }
@@ -172,9 +205,8 @@ router.get('/', async (req, res) => {
   const w = parseInt(req.query.week, 10);
   if (!Number.isFinite(w) || w <= 0) return res.status(400).json({ error: 'week required' });
 
-  const file = weekFile(PREDDIR, w);
-  const raw = await readJson(file, {});
-  return res.json(toMapShape(raw));
+  const map = await readPredictionsMap(req, w);
+  return res.json(map);
 });
 
 // GET /api/predictions/mine?week=N  (header x-player-id also accepted)
@@ -186,9 +218,7 @@ router.get('/mine', async (req, res) => {
   const player_id = String(req.query.player_id || req.query.playerId || req.get('x-player-id') || '').trim();
   if (!player_id) return res.status(400).json({ error: 'player_id required' });
 
-  const file = weekFile(PREDDIR, w);
-  const raw = await readJson(file, {});
-  const map = toMapShape(raw);
+  const map = await readPredictionsMap(req, w);
   const row = map[player_id] || { player_id, predictions: [], submitted_at: null, email_sent_at: null };
 
   return res.json({ ok: true, week: w, player_id, ...row });
@@ -211,12 +241,8 @@ router.post('/', async (req, res) => {
   if (!incoming.length) return res.status(400).json({ error: 'predictions must be a non-empty array with {id,home,away}' });
 
   // Load config + fixtures and compute locking
-  const cfg = normalizeConfig(loadConfigSync());
-  const fixturesBase = path.join(DATA, 'fixtures', `season-${cfg.season || 2025}`);
-  const fixtures =
-       await readJson(path.join(fixturesBase, `week-${w}.json`), null)
-    ?? await readJson(path.join(fixturesBase, 'weeks', `week-${w}.json`), []);
-
+  const cfg = normalizeConfig(loadConfigSync(req));
+  const fixtures = await readFixturesForWeek(req, (cfg.season || 2025), w);
   const lockStatus = computeLockStatus(fixtures, cfg);
 
   // Enforce locking (first_kickoff)
@@ -253,21 +279,20 @@ router.post('/', async (req, res) => {
   }
 
   // Persist (map keyed by player_id) — MERGE with existing picks
-  const file = weekFile(PREDDIR, w);
-  const raw = await readJson(file, {});
-  const map = toMapShape(raw);
-
-  const prev = map[player_id]?.predictions || [];
+  const fileTenant = weekFileTenant(req, w);
+  const existingMap = await readPredictionsMap(req, w);
+  const prev = existingMap[player_id]?.predictions || [];
   const next = mergePreds(prev, accepted);
 
-  map[player_id] = {
+  existingMap[player_id] = {
     player_id,
     predictions: next,
     submitted_at: new Date().toISOString(),
-    email_sent_at: map[player_id]?.email_sent_at ?? null,
+    email_sent_at: existingMap[player_id]?.email_sent_at ?? null,
   };
 
-  await writeJson(file, map);
+  ensureDirForFile(fileTenant);
+  await writeJson(fileTenant, existingMap);
 
   res.json({
     ok: true,

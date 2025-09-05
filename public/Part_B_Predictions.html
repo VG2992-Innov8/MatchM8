@@ -14,7 +14,7 @@
     .match .no{width:26px;text-align:right}
     .match .team{min-width:120px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .match .sep{margin:0 8px}
-    .match input.pred{width:56px;text-align:right}
+    .match input.pred{width:56px;text-align:center}
 
     /* --- Inline Results + Points widget --- */
     .rpw-wrap{display:inline-flex;align-items:center;gap:6px;margin-left:10px;flex:0 0 auto;white-space:nowrap}
@@ -22,7 +22,7 @@
       width:44px !important;
       padding:2px 6px;
       box-sizing:border-box;
-      text-align:right;
+      text-align:center;
       font-variant-numeric:tabular-nums;
     }
     .rpw-wrap .pts-badge{
@@ -32,29 +32,18 @@
       display:inline-block;
     }
 
-    /* --- Predictions row layout --- */
-.match-grid {
-  display: grid;
-  grid-template-columns:
-    28px                         /* index  */
-    minmax(160px, 1fr)           /* home team name */
-    56px 14px 56px               /* home pred, dash, away pred */
-    24px                         /* spacer */
-    56px 14px 56px               /* home result, dash, away result */
-    auto;                        /* lock/status */
-  align-items: center;
-  gap: 8px;
-  margin: 10px 0;
-}
-
-.match-grid .idx { text-align: right; opacity: .8; }
-.match-grid .dash { text-align: center; opacity: .7; }
-.match-grid input.pred, .match-grid input.res {
-  width: 56px; text-align: center;
-  padding: 6px 8px;
-}
-.match-grid .team { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
+    /* --- (optional) grid version kept for later tidy-ups --- */
+    .match-grid {
+      display: grid;
+      grid-template-columns: 28px minmax(160px,1fr) 56px 14px 56px 24px 56px 14px 56px auto;
+      align-items: center;
+      gap: 8px;
+      margin: 10px 0;
+    }
+    .match-grid .idx { text-align: right; opacity: .8; }
+    .match-grid .dash { text-align: center; opacity: .7; }
+    .match-grid input.pred, .match-grid input.res { width: 56px; text-align: center; padding: 6px 8px; }
+    .match-grid .team { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   </style>
 </head>
 <body>
@@ -62,6 +51,11 @@
   <script src="/hero.js" defer></script>
 
   <main class="container wide">
+    <!-- Identity header (loaded once, mounted here) -->
+    <script src="/js/mm8-ident.js"></script>
+    <div id="mm8-ident"></div>
+    <script>MM8 && MM8.ident && MM8.ident.mount('#mm8-ident');</script>
+
     <h2 id="weekLabel" class="subhead"></h2>
     <div class="panel">
       <div class="center">
@@ -80,6 +74,27 @@
   </main>
 
   <script>
+    // simple helper kept from your draft (optional)
+    async function saveWeek(week, picks) {
+      // picks = [{ id: "EPL-2025-W1-M1", home: 3, away: 1 }, ...]
+      const out = await MM8.predictions.submit(week, picks);
+      console.log('Saved', out);
+      alert('Predictions saved!');
+    }
+  </script>
+
+  <script>
+    /* ---------------- tenant helper (used everywhere) ---------------- */
+    function withTenant(url) {
+      const u = new URL(url, location.origin);
+      const t = new URLSearchParams(location.search).get('t') || localStorage.getItem('tenant') || '';
+      if (t) u.searchParams.set('t', t);
+      return u.toString();
+    }
+    // persist tenant for this tab/session
+    const TENANT = new URLSearchParams(location.search).get('t') || localStorage.getItem('tenant') || '';
+    if (TENANT) localStorage.setItem('tenant', TENANT);
+
     // ------- config -------
     let TOTAL_WEEKS = 38;
     let CURRENT_WEEK = 1;
@@ -100,7 +115,8 @@
 
     function setScoringLink(){
       const wk = clamp(Number(weekInput.value || 1));
-      document.getElementById('toScoring').href = `/Part_D_Scoring.html?week=${wk}`;
+      document.getElementById('toScoring').href =
+        withTenant(`/Part_D_Scoring.html?week=${wk}`);
     }
     function setWeekLabel(){
       const wk = clamp(Number(weekInput.value || 1));
@@ -120,7 +136,7 @@
 
     async function loadConfig() {
       try {
-        const cfg = await fetch('/api/config', {cache:'no-store'}).then(r => r.json());
+        const cfg = await fetch(withTenant('/api/config'), {cache:'no-store'}).then(r => r.json());
         TOTAL_WEEKS    = Number(cfg.total_weeks || 38);
         LOCK_MINS      = Number(cfg.lock_minutes_before_kickoff ?? cfg.lock_mins ?? 10);
         DEADLINE_MODE  = (String(cfg.deadline_mode||'first_kickoff').toLowerCase() === 'per_match') ? 'per_match' : 'first_kickoff';
@@ -139,7 +155,7 @@
 
     async function fetchFixtures(week){
       try{
-        const res = await fetch(`/api/fixtures?week=${encodeURIComponent(week)}`, {cache:'no-store'});
+        const res = await fetch(withTenant(`/api/fixtures?week=${encodeURIComponent(week)}`), {cache:'no-store'});
         if(!res.ok) return [];
         const data = await res.json();
         const list = Array.isArray(data) ? data : (Array.isArray(data.fixtures) ? data.fixtures : []);
@@ -207,8 +223,8 @@
         const line = document.querySelector(`.line[data-id="${p.id}"]`);
         if(!line) return;
         const [h,a]=line.querySelectorAll('input.pred');
-        if (h) h.value = (p.home ?? '') === null ? '' : p.home ?? '';
-        if (a) a.value = (p.away ?? '') === null ? '' : p.away ?? '';
+        if (h) h.value = (p.home == null) ? '' : p.home;
+        if (a) a.value = (p.away == null) ? '' : p.away;
       });
     }
 
@@ -281,11 +297,11 @@
       // Keep a local backup scoped to season+week+player
       localStorage.setItem(storageKey(week), JSON.stringify(predictions));
 
-      // include player_id (from login) + send header too
+      // include player_id (from login)
       const player_id = (localStorage.getItem('player_id') || '').trim();
 
       try{
-        await fetch('/api/predictions', {
+        await fetch(withTenant('/api/predictions'), {
           method:'POST',
           headers: {
             'Content-Type':'application/json',
@@ -299,7 +315,7 @@
       b.style.display='block'; setTimeout(()=>b.style.display='none',1400);
     }
 
-    // --- Results inline population ---
+    // --- Results inline population (scores route if available, else plain /api/results) ---
     function getIdentity(){
       const s = window.localStorage || {};
       const qs = new URLSearchParams(location.search);
@@ -310,7 +326,7 @@
     }
     async function fetchLockInfo(week){
       try{
-        const r = await fetch(`/api/locks?week=${encodeURIComponent(week)}`, { cache:'no-store' });
+        const r = await fetch(withTenant(`/api/locks?week=${encodeURIComponent(week)}`), { cache:'no-store' });
         if (!r.ok) return null;
         return await r.json();
       }catch{ return null; }
@@ -320,13 +336,21 @@
       const q = new URLSearchParams({ week: String(week) });
       if (who.id) q.set('player_id', who.id); else q.set('name', who.name);
       try{
-        const r = await fetch(`/api/scores/player-week?${q.toString()}`, { cache:'no-store' });
+        const r = await fetch(withTenant(`/api/scores/player-week?${q.toString()}`), { cache:'no-store' });
         if (!r.ok) return null;
         const data = await r.json();
         return new Map((data.rows||[]).map(r => [String(r.matchId), r]));
       }catch{ return null; }
     }
-    function setWidget(matchId, row, showBlank){
+    async function fetchPlainResults(week){
+      try{
+        const r = await fetch(withTenant(`/api/results?week=${encodeURIComponent(week)}`), { cache:'no-store' });
+        if (!r.ok) return null;
+        const data = await r.json();
+        return data && data.results ? data.results : null;
+      }catch{ return null; }
+    }
+    function setWidgetFromRow(matchId, row, showBlank){
       const wrap = document.querySelector(`.rpw-wrap[data-match-id="${CSS.escape(String(matchId))}"]`);
       if (!wrap) return;
       const h = wrap.querySelector('.rpw-h');
@@ -340,17 +364,36 @@
         p.textContent = Number.isFinite(row.points) ? `+${row.points}` : '';
       }
     }
+    function setWidgetFromPlain(matchId, plain){
+      const wrap = document.querySelector(`.rpw-wrap[data-match-id="${CSS.escape(String(matchId))}"]`);
+      if (!wrap) return;
+      const h = wrap.querySelector('.rpw-h');
+      const a = wrap.querySelector('.rpw-a');
+      const p = wrap.querySelector('.rpw-pts');
+      if (!plain) { h.value=''; a.value=''; p.textContent=''; return; }
+      h.value = Number.isFinite(plain.home) ? plain.home : '';
+      a.value = Number.isFinite(plain.away) ? plain.away : '';
+      p.textContent = ''; // points unknown without /scores
+    }
     async function populateResults(){
       const week = Number(weekInput.value || 1);
       const who  = getIdentity();
-      const [locks, rowsMap] = await Promise.all([fetchLockInfo(week), fetchPlayerWeek(week, who)]);
+
+      const [locks, rowsMap, plain] = await Promise.all([
+        fetchLockInfo(week),
+        fetchPlayerWeek(week, who),
+        fetchPlainResults(week)
+      ]);
       const weekLocked = (locks?.mode === 'first_kickoff') ? !!locks.weekLocked : null;
 
-      // For each line, fill widget (blank when week not locked in first_kickoff)
       document.querySelectorAll('.line').forEach(line=>{
-        const id = line.dataset.id;
-        const row = rowsMap ? rowsMap.get(String(id)) : null;
-        setWidget(id, row, weekLocked === false);
+        const id = String(line.dataset.id);
+        if (rowsMap) {
+          const row = rowsMap.get(id);
+          setWidgetFromRow(id, row, weekLocked === false);
+        } else if (plain) {
+          setWidgetFromPlain(id, plain[id]);
+        }
       });
     }
 
@@ -365,6 +408,30 @@
     });
 
     (async () => { await loadConfig(); await load(); })();
+  </script>
+
+  <!-- admin health check (quiet) -->
+  <script>
+  (async () => {
+    const u = new URL(location.href);
+    const tenant = u.searchParams.get('t') || localStorage.getItem('tenant') || '';
+    const token  = localStorage.getItem('admin_token') || '';
+
+    const headers = {};
+    if (token)  headers['x-admin-token'] = token;
+    if (tenant) headers['x-tenant']      = tenant;
+
+    try {
+      const r  = await fetch('/api/admin/health', { headers });
+      const ok = r.ok;
+
+      const adminLink =
+        document.querySelector('a[href*="admin.html"], button[data-role="admin-link"]');
+      if (adminLink) adminLink.style.display = ok ? '' : 'none';
+    } catch (e) {
+      console.debug('admin health check skipped', e);
+    }
+  })();
   </script>
 </body>
 </html>

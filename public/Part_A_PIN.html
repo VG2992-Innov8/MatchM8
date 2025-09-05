@@ -37,6 +37,9 @@
       </div>
     </div>
 
+    <!-- load identity helper BEFORE the inline script below -->
+    <script src="/js/mm8-ident.js"></script>
+
     <!-- Self-registration Panel -->
     <div class="panel" id="signupPanel">
       <h2 style="margin-top:0">New here? Create an account</h2>
@@ -60,14 +63,36 @@
   </main>
 
   <script>
+  /* ---------------- tenant helpers ---------------- */
+  const qs = new URLSearchParams(location.search);
+  const currentTenant = qs.get('t') || localStorage.getItem('tenant') || '';
+  if (qs.get('t')) { try { localStorage.setItem('tenant', qs.get('t')); } catch {} }
+
+  function withTenant(url) {
+    const u = new URL(url, location.origin);
+    const t = qs.get('t') || localStorage.getItem('tenant') || '';
+    if (t) u.searchParams.set('t', t);
+    return u.toString();
+  }
+
+  const TENANT = new URLSearchParams(location.search).get('t') || localStorage.getItem('tenant') || '';
+  if (TENANT) localStorage.setItem('tenant', TENANT);
+
+  // tiny helper to keep tenant on navigation
+  function navWithTenant(path, extra='') {
+    const t = qs.get('t') || localStorage.getItem('tenant') || '';
+    const sep = path.includes('?') ? '&' : '?';
+    return t ? `${path}${sep}t=${encodeURIComponent(t)}${extra}` : `${path}${extra}`;
+  }
+
   // Helpers
   const $ = (s) => document.querySelector(s);
   function setMsg(el, text, ok){ el.textContent = text || ''; el.style.color = ok ? 'green' : 'crimson'; }
 
-  // License banner
+  // License banner (global; ok to pass tenant too)
   (async function initLicense(){
     try{
-      const r = await fetch('/api/license/status', { cache:'no-store' });
+      const r = await fetch(withTenant('/api/license/status'), { cache:'no-store' });
       if(!r.ok) return;
       const s = await r.json();
       const box = $('#licenseBanner');
@@ -83,24 +108,41 @@
     }catch{}
   })();
 
-  // -------- Admin auth helpers --------
-  async function adminState(){ const r = await fetch('/api/admin/state'); return r.ok ? r.json() : { bootstrap_required:false }; }
+  // -------- Admin auth helpers (tenant-aware, tolerant of both path styles) --------
+  async function adminState(){
+    // try /auth/state first, then /state
+    let r = await fetch(withTenant('/api/admin/auth/state')).catch(()=>null);
+    if (!r || !r.ok) r = await fetch(withTenant('/api/admin/state')).catch(()=>null);
+    return r && r.ok ? r.json() : { bootstrap_required:false };
+  }
   async function adminBootstrap(new_password){
-    const r = await fetch('/api/admin/bootstrap', {
+    // try legacy _bootstrap then bootstrap
+    let r = await fetch(withTenant('/api/admin/_bootstrap'), {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ new_password })
-    });
-    if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error || 'bootstrap_failed');
+      body: JSON.stringify({ password: new_password, new_password })
+    }).catch(()=>null);
+    if (!r || !r.ok) {
+      r = await fetch(withTenant('/api/admin/bootstrap'), {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ password: new_password, new_password })
+      }).catch(()=>null);
+    }
+    if(!r || !r.ok) {
+      let msg = 'bootstrap_failed';
+      try { msg = (await r.json()).error || msg; } catch {}
+      throw new Error(msg);
+    }
   }
   async function adminLogin(password){
-    const r = await fetch('/api/admin/login', {
+    const r = await fetch(withTenant('/api/admin/login'), {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ password })
     });
     const j = await r.json().catch(()=>({}));
     if(r.status === 409 && j.error === 'bootstrap_required') return { bootstrap:true };
     if(!r.ok || !j.ok) throw new Error(j.error || 'admin_login_failed');
-    localStorage.setItem('admin_token', j.token);
+    // store whatever token server returns (separate from ADMIN_TOKEN)
+    try { localStorage.setItem('admin_session', j.token || ''); } catch {}
     return { ok:true };
   }
 
@@ -124,7 +166,7 @@
           await adminBootstrap(pin);
         }
         const ok = await adminLogin(pin);
-        if (ok) { location.href = '/ui/admin.html'; return; }
+        if (ok) { location.href = navWithTenant('/admin.html'); return; }
       } catch (e) {
         const map = {
           bad_password: 'Wrong Admin password.',
@@ -144,7 +186,7 @@
       btn.disabled = false; return;
     }
     try{
-      const r = await fetch('/api/auth/pin/verify', {
+      const r = await fetch(withTenant('/api/auth/pin/verify'), {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ name, pin })
       });
@@ -152,8 +194,13 @@
       const j = ct.includes('application/json') ? await r.json() : {};
       if(!r.ok || j.ok === false) throw new Error(j.error || ('HTTP '+r.status));
 
-      try{ localStorage.setItem('player_name', j.name || name); localStorage.setItem('player_id', j.id); }catch{}
-      location.href = '/Part_B_Predictions.html';
+      // ✅ Remember the signed-in player for later API calls (adds x-player-id automatically)
+      try { MM8.ident.remember({ id: j.id || '', name: j.name || name }); } catch {}
+
+      // Keep tenant sticky (optional safeguard)
+      if (currentTenant) { try { localStorage.setItem('tenant', currentTenant); } catch {} }
+
+      location.href = navWithTenant('/Part_B_Predictions.html');
     }catch(e){
       const map = {
         'player not found': 'No such player. Check spelling or create an account.',
@@ -170,7 +217,7 @@
   $('#loginForm').addEventListener('submit', doLogin);
   $('#btnLogin').addEventListener('click', doLogin);
 
-  // -------- Signup (unchanged) --------
+  // -------- Signup --------
   async function selfSignup(){
     const name   = $('#suName').value.trim();
     const email  = $('#suEmail').value.trim();
@@ -181,19 +228,26 @@
     if(!name || pin.length<4) return setMsg(msgEl, 'Enter a name and a 4+ digit PIN.', false);
 
     try{
-      const r = await fetch('/api/players/register', {
+      const r = await fetch(withTenant('/api/players/register'), {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ name, email, pin, invite_code: invite })
       });
       const j = await r.json();
       if(!r.ok || !j.ok) throw new Error(j.error || 'sign_up_failed');
 
-      const v = await fetch('/api/auth/pin/verify', {
+      // Log in immediately after signup (best effort)
+      const v = await fetch(withTenant('/api/auth/pin/verify'), {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ name, pin })
       });
-      if(v.ok){ setMsg(msgEl, 'Account created! Redirecting…', true); setTimeout(()=> location.href='/Part_B_Predictions.html', 400); }
-      else { setMsg(msgEl, 'Account created. Please sign in above.', true); }
+      if(v.ok){
+        const jj = await v.json().catch(()=>({}));
+        try { MM8.ident.remember({ id: jj.id || '', name: jj.name || name }); } catch {}
+        setMsg(msgEl, 'Account created! Redirecting…', true);
+        setTimeout(()=> location.href = navWithTenant('/Part_B_Predictions.html'), 400);
+      } else {
+        setMsg(msgEl, 'Account created. Please sign in above.', true);
+      }
     }catch(e){
       const map = {
         name_taken: 'That name is already taken.',
@@ -210,12 +264,7 @@
   $('#btnSignup').addEventListener('click', selfSignup);
   $('#suPin').addEventListener('keydown', e=>{ if(e.key==='Enter') selfSignup(); });
 
-  /* ---- Clear "New user" fields when returning to Home ----
-     Clears the Full name + Choose a PIN inputs on:
-     - initial load,
-     - browser back/forward cache restores,
-     - tab returning to visible.
-  */
+  /* ---- Clear "New user" fields when returning to Home ---- */
   (function(){
     function resetSignupFields(){
       const nameEl = $('#suName');

@@ -1,31 +1,56 @@
-// routes/auth.js — bcrypt PIN set/verify/change (back-compatible) + whoami cookies
+// routes/auth.js — bcrypt PIN set/verify/change (back-compatible) + whoami cookies (TENANT-AWARE)
+
 const express = require('express');
 const path = require('path');
 const { readFile } = require('fs/promises');
+const fs = require('fs');
 const bcrypt = require('bcryptjs');
 const { writeJsonAtomic } = require('../utils/atomicJson');
-const { DATA_DIR } = require('../lib/paths');           // ✅ use central runtime data dir
+const { DATA_DIR } = require('../lib/paths'); // default/global data dir
 
 const router = express.Router();
-const PLAYERS = path.join(DATA_DIR, 'players.json');     // ✅ read/write in DATA_DIR
-console.log('[auth] PLAYERS =>', PLAYERS);
 
-async function loadPlayers() {
-  try { return JSON.parse(await readFile(PLAYERS, 'utf8')); }
-  catch { return []; }
+// ---------- per-request data paths (tenant-aware) ----------
+function dataDirFor(req) {
+  // prefer per-request tenant folder, else global DATA_DIR
+  return (req && req.ctx && req.ctx.dataDir) ? req.ctx.dataDir : DATA_DIR;
 }
-async function savePlayers(list) { await writeJsonAtomic(PLAYERS, list); }
+function playersPathFor(req) {
+  return path.join(dataDirFor(req), 'players.json');
+}
+
+// ---------- I/O helpers ----------
+async function loadPlayers(req) {
+  const p = playersPathFor(req);
+  try {
+    const txt = await readFile(p, 'utf8');
+    const arr = JSON.parse(txt);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+async function savePlayers(req, list) {
+  const p = playersPathFor(req);
+  try { fs.mkdirSync(path.dirname(p), { recursive: true }); } catch {}
+  await writeJsonAtomic(p, list);
+}
 
 // Helpers
-const asId = v => v != null ? String(v) : undefined;
-const isValidPin = v => typeof v === 'string' ? v.trim().length >= 4 : String(v||'').length >= 4;
+const asId = v => (v != null ? String(v) : undefined);
+const isValidPin = v => (typeof v === 'string' ? v.trim().length >= 4 : String(v || '').length >= 4);
+const norm = s => String(s || '')
+  .normalize('NFKC')
+  .trim()
+  .replace(/\s+/g, ' ')
+  .toLowerCase();
 
 // ---- cookie helpers for whoami/personalization ----
 const isProd = process.env.NODE_ENV === 'production';
 function setWhoamiCookies(res, player) {
   // lightweight, non-HttpOnly so front-end can read (used only for display)
-  const base = { sameSite: 'Lax', httpOnly: false, secure: isProd, maxAge: 180*24*60*60*1000 }; // ~180 days
-  res.cookie('player_id',   String(player.id),   base);
+  const base = { sameSite: 'Lax', httpOnly: false, secure: isProd, maxAge: 180 * 24 * 60 * 60 * 1000 }; // ~180 days
+  res.cookie('player_id', String(player.id), base);
   res.cookie('player_name', String(player.name), base);
 }
 function clearWhoamiCookies(res) {
@@ -34,116 +59,132 @@ function clearWhoamiCookies(res) {
   res.clearCookie('player_name', base);
 }
 
-// -------------------------------------------------------
-
-/**
- * POST /api/auth/pin/set
- * body: { player_id? | name?, pin }
- * Sets a PIN only if one isn't already set for that player.
- */
+/* ============================================================
+   POST /api/auth/pin/set
+   body: { player_id? | name?, pin }
+   Sets a PIN only if one isn't already set for that player.
+   ============================================================ */
 router.post('/pin/set', express.json(), async (req, res) => {
-  const { player_id, name, pin } = req.body || {};
-  if (!isValidPin(pin)) return res.status(400).json({ error: 'PIN must be at least 4 characters' });
+  try {
+    const { player_id, name, pin } = req.body || {};
+    if (!isValidPin(pin)) return res.status(400).json({ error: 'PIN must be at least 4 characters' });
 
-  const players = await loadPlayers();
-  const idx = players.findIndex(p => (player_id && asId(p.id) === asId(player_id)) || (name && p.name === name));
-  if (idx < 0) return res.status(404).json({ error: 'player not found' });
+    const players = await loadPlayers(req);
+    const idx = players.findIndex(p =>
+      (player_id && asId(p.id) === asId(player_id)) ||
+      (name && norm(p.name) === norm(name))
+    );
+    if (idx < 0) return res.status(404).json({ error: 'player not found' });
 
-  if (players[idx].pin_hash) return res.status(409).json({ error: 'PIN already set' });
+    if (players[idx].pin_hash) return res.status(409).json({ error: 'PIN already set' });
 
-  players[idx].pin_hash = await bcrypt.hash(String(pin), 10);
-  delete players[idx].pin; // remove any legacy plaintext field
-  players[idx].pin_updated_at = new Date().toISOString();
-  await savePlayers(players);
-  res.json({ ok: true, id: players[idx].id, name: players[idx].name });
+    players[idx].pin_hash = await bcrypt.hash(String(pin), 10);
+    delete players[idx].pin; // remove any legacy plaintext field
+    players[idx].pin_updated_at = new Date().toISOString();
+    await savePlayers(req, players);
+    res.json({ ok: true, id: players[idx].id, name: players[idx].name });
+  } catch (e) {
+    res.status(500).json({ error: 'server_error' });
+  }
 });
 
-/**
- * POST /api/auth/pin/verify
- * body: { player_id? | name?, pin }
- * Verifies a player's PIN; if legacy plaintext `pin` exists and matches, migrates to hash.
- * Also sets cookies (player_id, player_name) for personalization (/api/auth/whoami).
- */
+/* ============================================================
+   POST /api/auth/pin/verify
+   body: { player_id? | name?, pin }
+   Verifies a player's PIN; if legacy plaintext `pin` exists and matches, migrates to hash.
+   Also sets cookies (player_id, player_name) for personalization (/api/auth/whoami).
+   TENANT-AWARE: reads players from req.ctx.dataDir when present.
+   ============================================================ */
 router.post('/pin/verify', express.json(), async (req, res) => {
-  const { player_id, name, pin } = req.body || {};
-  const players = await loadPlayers();
+  try {
+    const { player_id, name, pin } = req.body || {};
+    const players = await loadPlayers(req);
 
-  // Robust lookup: by id if provided, otherwise name (case/space insensitive)
-  const norm = s => String(s || '')
-    .normalize('NFKC')
-    .trim()
-    .replace(/\s+/g, ' ')
-    .toLowerCase();
+    // Robust lookup: by id if provided, otherwise name (case/space insensitive)
+    let p = null;
+    if (player_id) p = players.find(u => asId(u.id) === asId(player_id));
+    if (!p && name) p = players.find(u => norm(u.name) === norm(name));
+    if (!p) return res.status(404).json({ error: 'player not found' });
 
-  let p = null;
-  if (player_id) p = players.find(u => asId(u.id) === asId(player_id));
-  if (!p && name) {
-    const needle = norm(name);
-    p = players.find(u => norm(u.name) === needle);
-  }
-  if (!p) return res.status(404).json({ error: 'player not found' });
+    // Back-compat: migrate on first successful verify
+    if (p.pin && String(pin) === String(p.pin)) {
+      p.pin_hash = await bcrypt.hash(String(pin), 10);
+      delete p.pin;
+      p.pin_updated_at = new Date().toISOString();
+      await savePlayers(req, players);
+      setWhoamiCookies(res, p);
+      return res.json({ ok: true, id: p.id, name: p.name });
+    }
 
-  // Back-compat: migrate on first successful verify
-  if (p.pin && String(pin) === String(p.pin)) {
-    p.pin_hash = await bcrypt.hash(String(pin), 10);
-    delete p.pin;
-    p.pin_updated_at = new Date().toISOString();
-    await savePlayers(players);
+    if (!p.pin_hash) return res.status(400).json({ error: 'no PIN set' });
+    const ok = await bcrypt.compare(String(pin || ''), p.pin_hash);
+    if (!ok) return res.status(401).json({ error: 'invalid PIN' });
+
     setWhoamiCookies(res, p);
     return res.json({ ok: true, id: p.id, name: p.name });
+  } catch (e) {
+    return res.status(500).json({ error: 'server_error' });
   }
-
-  if (!p.pin_hash) return res.status(400).json({ error: 'no PIN set' });
-  const ok = await bcrypt.compare(String(pin || ''), p.pin_hash);
-  if (!ok) return res.status(401).json({ error: 'invalid PIN' });
-
-  setWhoamiCookies(res, p);
-  return res.json({ ok: true, id: p.id, name: p.name });
 });
 
-/**
- * POST /api/auth/pin/change
- * body: { player_id? | name?, old_pin, new_pin }
- */
+/* ============================================================
+   POST /api/auth/pin/change
+   body: { player_id? | name?, old_pin, new_pin }
+   ============================================================ */
 router.post('/pin/change', express.json(), async (req, res) => {
-  const { player_id, name, old_pin, new_pin } = req.body || {};
-  if (!isValidPin(new_pin)) return res.status(400).json({ error: 'New PIN must be at least 4 characters' });
+  try {
+    const { player_id, name, old_pin, new_pin } = req.body || {};
+    if (!isValidPin(new_pin)) return res.status(400).json({ error: 'New PIN must be at least 4 characters' });
 
-  const players = await loadPlayers();
-  const idx = players.findIndex(u => (player_id && asId(u.id) === asId(player_id)) || (name && u.name === name));
-  if (idx < 0) return res.status(404).json({ error: 'player not found' });
+    const players = await loadPlayers(req);
+    const idx = players.findIndex(u =>
+      (player_id && asId(u.id) === asId(player_id)) ||
+      (name && norm(u.name) === norm(name))
+    );
+    if (idx < 0) return res.status(404).json({ error: 'player not found' });
 
-  const p = players[idx];
-  let ok = false;
-  if (p.pin_hash) ok = await bcrypt.compare(String(old_pin || ''), p.pin_hash);
-  else if (p.pin) ok = String(old_pin) === String(p.pin);
-  if (!ok) return res.status(401).json({ error: 'old PIN incorrect' });
+    const p = players[idx];
+    let ok = false;
+    if (p.pin_hash) ok = await bcrypt.compare(String(old_pin || ''), p.pin_hash);
+    else if (p.pin) ok = String(old_pin) === String(p.pin);
+    if (!ok) return res.status(401).json({ error: 'old PIN incorrect' });
 
-  p.pin_hash = await bcrypt.hash(String(new_pin), 10);
-  delete p.pin;
-  p.pin_updated_at = new Date().toISOString();
-  await savePlayers(players);
+    p.pin_hash = await bcrypt.hash(String(new_pin), 10);
+    delete p.pin;
+    p.pin_updated_at = new Date().toISOString();
+    await savePlayers(req, players);
 
-  setWhoamiCookies(res, p);
-  res.json({ ok: true, id: p.id, name: p.name });
+    setWhoamiCookies(res, p);
+    res.json({ ok: true, id: p.id, name: p.name });
+  } catch (e) {
+    res.status(500).json({ error: 'server_error' });
+  }
 });
 
-/**
- * GET /api/auth/whoami
- */
+/* ============================================================
+   GET /api/auth/whoami
+   ============================================================ */
 router.get('/whoami', (req, res) => {
-  const id = req.cookies?.player_id;
-  const name = req.cookies?.player_name;
-  if (id && name) return res.json({ ok: true, player: { id, name } });
-  return res.status(401).json({ ok: false });
+  try {
+    const id = req.cookies?.player_id;
+    const name = req.cookies?.player_name;
+    if (id && name) return res.json({ ok: true, player: { id, name } });
+    return res.status(401).json({ ok: false });
+  } catch {
+    return res.status(500).json({ ok: false });
+  }
 });
 
-/**
- * POST /api/auth/logout
- */
+/* ============================================================
+   POST /api/auth/logout
+   ============================================================ */
 router.post('/logout', (_req, res) => {
-  clearWhoamiCookies(res);
-  res.json({ ok: true });
+  try {
+    clearWhoamiCookies(res);
+    res.json({ ok: true });
+  } catch {
+    res.status(500).json({ ok: false });
+  }
 });
 
 module.exports = router;

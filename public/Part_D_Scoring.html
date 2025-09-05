@@ -10,6 +10,11 @@
   <div id="hero" data-page="Scoring"></div>
   <script src="/hero.js" defer></script>
 
+  <!-- Identity header (player name + tenant picker) -->
+  <script src="/js/mm8-ident.js"></script>
+  <div id="mm8-ident"></div>
+  <script>MM8 && MM8.ident && MM8.ident.mount('#mm8-ident');</script>
+
   <main class="container wide">
     <div class="panel">
       <div class="center" style="gap:8px; flex-wrap:wrap;">
@@ -38,6 +43,25 @@
   </main>
 
   <script>
+  /* ---------------- tenant helpers ---------------- */
+  function withTenant(url) {
+    const u = new URL(url, location.origin);
+    const t = new URLSearchParams(location.search).get('t') || localStorage.getItem('tenant') || '';
+    if (t) u.searchParams.set('t', t);
+    return u.toString();
+  }
+  function navWithTenant(path, extra='') {
+    const t = new URLSearchParams(location.search).get('t') || localStorage.getItem('tenant') || '';
+    const sep = path.includes('?') ? '&' : '?';
+    return t ? `${path}${sep}t=${encodeURIComponent(t)}${extra}` : `${path}${extra}`;
+  }
+  // persist tenant (so Part_B / Part_A keep it)
+  (function(){
+    const t = new URLSearchParams(location.search).get('t');
+    if (t) try { localStorage.setItem('tenant', t); } catch {}
+  })();
+
+  /* ---------------- page logic ---------------- */
   const $ = s => document.querySelector(s);
   const qs = new URLSearchParams(location.search);
   const weekInput = $('#week');
@@ -69,7 +93,7 @@
 
   async function loadConfig(){
     try{
-      const cfg = await fetch('/api/config', { cache:'no-store' }).then(r=>r.json());
+      const cfg = await fetch(withTenant('/api/config'), { cache:'no-store' }).then(r=>r.json());
       TOTAL_WEEKS = Number(cfg.total_weeks) || 38;
       const urlW = Number(qs.get('week'));
       const startW = Number.isFinite(urlW) ? urlW : (Number(cfg.current_week) || 1);
@@ -145,7 +169,7 @@
       // Prefer the summary join (cumulative)
       let rows = [];
       try{
-        const r1 = await fetch(`/api/scores/summary?week=${encodeURIComponent(w)}`, { cache:'no-store' });
+        const r1 = await fetch(withTenant(`/api/scores/summary?week=${encodeURIComponent(w)}`), { cache:'no-store' });
         if (r1.ok) {
           const data1 = await r1.json().catch(()=> ({}));
           rows = rowsFromSummary(data1);
@@ -154,7 +178,7 @@
 
       // Fallback to legacy preview if needed
       if (!rows.length) {
-        const r2 = await fetch(`/api/scores?week=${encodeURIComponent(w)}`, { cache:'no-store' });
+        const r2 = await fetch(withTenant(`/api/scores?week=${encodeURIComponent(w)}`), { cache:'no-store' });
         if (!r2.ok) throw new Error(`${r2.status} ${r2.statusText}`);
         const data2 = await r2.json().catch(()=> ({}));
         rows = normaliseScores(data2);
@@ -175,13 +199,13 @@
       const w = clampWeek();
 
       // Try POST with query param, then fallback GET, then POST with JSON body
-      let resp = await fetch(`/api/scores/compute?week=${encodeURIComponent(w)}`, { method:'POST' })
+      let resp = await fetch(withTenant(`/api/scores/compute?week=${encodeURIComponent(w)}`), { method:'POST' })
                   .catch(()=>null);
       if (!resp || !resp.ok) {
-        resp = await fetch(`/api/scores/compute?week=${encodeURIComponent(w)}`).catch(()=>null);
+        resp = await fetch(withTenant(`/api/scores/compute?week=${encodeURIComponent(w)}`)).catch(()=>null);
       }
       if (!resp || !resp.ok) {
-        resp = await fetch('/api/scores/compute', {
+        resp = await fetch(withTenant('/api/scores/compute'), {
           method:'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ week: w })
@@ -200,7 +224,7 @@
   // Wire-up
   $('#btnPreview').addEventListener('click', preview);
   $('#btnCompute').addEventListener('click', compute);
-  $('#btnSeason').addEventListener('click', ()=> location.href='/Part_E_Season.html');
+  $('#btnSeason').addEventListener('click', ()=> location.href = navWithTenant('/Part_E_Season.html'));
   weekInput.addEventListener('change', ()=> { clampWeek(); preview(); });
 
   (async function init(){

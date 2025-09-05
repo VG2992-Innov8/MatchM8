@@ -41,6 +41,11 @@
   <div id="hero" data-page="Season"></div>
   <script src="/hero.js" defer></script>
 
+  <!-- Identity header (player name + tenant picker) -->
+  <script src="/js/mm8-ident.js"></script>
+  <div id="mm8-ident"></div>
+  <script>MM8 && MM8.ident && MM8.ident.mount('#mm8-ident');</script>
+
   <main class="container wide">
     <div class="panel controls" style="justify-content:space-between">
       <div class="controls">
@@ -85,6 +90,19 @@
 
   <script>
   (function(){
+    /* ---------- tenant helpers ---------- */
+    function withTenant(url) {
+      const u = new URL(url, location.origin);
+      const t = new URLSearchParams(location.search).get('t') || localStorage.getItem('tenant') || '';
+      if (t) u.searchParams.set('t', t);
+      return u.toString();
+    }
+    // persist tenant from the URL
+    (function(){
+      const t = new URLSearchParams(location.search).get('t');
+      if (t) { try { localStorage.setItem('tenant', t); } catch {} }
+    })();
+
     var $ = function(s){ return document.querySelector(s); };
     var thead = $('#tbl thead');
     var tbody = $('#tbl tbody');
@@ -133,18 +151,18 @@
       return { weeks: weeks, rows: rows };
     }
 
-     function buildHeader(weeks) {
-    var weekCols = weeks.map(function(w){
-      return '<th class="right mono">WK ' + w + ' PTS</th>';
-    }).join('');
-    thead.innerHTML =
-        '<tr>'
-      +   '<th style="width:72px">Rank</th>'
-      +   '<th>Player</th>'
-      +    weekCols
-      +   '<th class="right">Season Total</th>'
-      + '</tr>';
-  }
+    function buildHeader(weeks) {
+      var weekCols = weeks.map(function(w){
+        return '<th class="right mono">WK ' + w + ' PTS</th>';
+      }).join('');
+      thead.innerHTML =
+          '<tr>'
+        +   '<th style="width:72px">Rank</th>'
+        +   '<th>Player</th>'
+        +    weekCols
+        +   '<th class="right">Season Total</th>'
+        + '</tr>';
+    }
 
     function renderMatrix(data) {
       buildHeader(data.weeks);
@@ -168,7 +186,7 @@
       var win = parseInt(selWindow.value, 10) || 10;
       localStorage.setItem('season_window', String(win));
       try {
-        var url = '/api/scores/leaderboard/matrix?window=' + win + '&t=' + Date.now();
+        var url = withTenant('/api/scores/leaderboard/matrix?window=' + win + '&_=' + Date.now());
         var res = await fetch(url, { cache: 'no-store' });
         if (!res.ok) throw new Error(String(res.status));
         var json = await res.json().catch(function(){ return {}; });
@@ -271,7 +289,7 @@
     async function loadPlayerWeek(pid, week) {
       var key = pid + ':' + week;
       if (pwCache.has(key)) return pwCache.get(key);
-      var url = '/api/scores/player-week?week=' + week + '&player_id=' + encodeURIComponent(pid);
+      var url = withTenant('/api/scores/player-week?week=' + week + '&player_id=' + encodeURIComponent(pid));
       var res = await fetch(url, { cache: 'no-store' });
       var json = await res.json().catch(function(){ return {}; });
       var norm = normalisePlayerWeek(json);

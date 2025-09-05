@@ -262,6 +262,16 @@
     /* ----------------- helpers ----------------- */
     const $ = sel => document.querySelector(sel);
     const qs = new URLSearchParams(location.search);
+
+    // >>> Tenant helper (NEW) <<<
+    const TENANT = qs.get('t') || localStorage.getItem('tenant') || '';
+    if (TENANT) { try { localStorage.setItem('tenant', TENANT); } catch {} }
+    function withTenant(url) {
+      const u = new URL(url, location.origin);
+      if (TENANT) u.searchParams.set('t', TENANT);
+      return u.toString();
+    }
+
     const weekInput = $('#week');
     const weekTitle = $('#weekTitle');
     const weekTitleInline = $('#weekTitleInline');
@@ -275,9 +285,13 @@
     const HAS_WEEK_QUERY = qs.has('week');
     let CURRENT_SEASON = 2025;
 
+    // >>> fixtures now come from API (tenant-aware) <<<
     function fixturesUrl(week){
-      const seasonVal = Number(document.getElementById('season')?.value || CURRENT_SEASON || 2025);
-      return `/data/fixtures/season-${seasonVal}/week-${week}.json?ts=${Date.now()}`;
+      const u = new URL('/api/fixtures', location.origin);
+      u.searchParams.set('week', String(week));
+      u.searchParams.set('ts', String(Date.now()));
+      if (TENANT) u.searchParams.set('t', TENANT);
+      return u.toString();
     }
 
     function showErr(msg) {
@@ -325,7 +339,9 @@
       const headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
       const tok = getToken();
       if (tok) headers['x-admin-token'] = tok;
-      const res = await fetch(url, { ...opts, headers });
+      // >>> ensure tenant is always appended <<<
+      const finalUrl = withTenant(url);
+      const res = await fetch(finalUrl, { ...opts, headers });
       if (!res.ok) {
         const text = await res.text().catch(() => '');
         throw new Error(`${res.status} ${res.statusText} - ${text || 'request failed'}`);
@@ -358,7 +374,6 @@
       weekTitle.textContent = week;
       if (weekTitleInline) weekTitleInline.textContent = week;
 
-      // Prefer unsaved fixtures in the UI (JSON box, then Add Fixtures rows).
       const { source, fixtures } =
       (typeof window.collectUnsavedFixtures === 'function'
         ? window.collectUnsavedFixtures()
@@ -372,7 +387,6 @@
               ? 'Preview from pasted JSON (not saved)'
               : 'Preview from Add Fixtures rows (not saved)';
         } else {
-          // Default: preview the saved week fixtures + any saved results
           const res = await apiFetch(`/api/admin/results?week=${encodeURIComponent(week)}`, { method: 'GET' });
           const results = (res && res.results) || {};
           await renderResultsEditable(week, results);
@@ -382,7 +396,6 @@
         showErr('Error while loading preview: ' + e.message);
       }
 
-      // Keep the Manage Fixtures panel in sync
       await renderManage();
     }
 
@@ -845,7 +858,7 @@
     async function computeScores() {
       const week = Number(document.querySelector('#week').value || 1);
       try {
-        const r = await fetch('/api/scores/compute', {
+        const r = await fetch(withTenant('/api/scores/compute'), {
           method: 'POST',
           headers: {'Content-Type':'application/json'},
           body: JSON.stringify({ week })
@@ -860,7 +873,7 @@
     /* ---------------- Season Settings ---------------- */
     async function loadSeason(){
       try {
-        const cfg = await fetch('/api/config').then(r=>r.json());
+        const cfg = await fetch(withTenant('/api/config')).then(r=>r.json());
         // read both snake_case + camelCase for safety
         const seasonVal = Number(cfg.season ?? 2025);
         const tw = Number(cfg.total_weeks ?? cfg.totalWeeks ?? 38);
@@ -1026,7 +1039,7 @@
 
       async function refreshLicense() {
         try {
-          const r = await fetch('/api/license/status');
+          const r = await fetch(withTenant('/api/license/status'));
           const s = await r.json();
           if (s.ok) {
             const lic = s.license || {};
@@ -1075,7 +1088,7 @@
           ? { player_id: idOrName, new_pin: newPin }
           : { name: idOrName, new_pin: newPin };
 
-        const res = await fetch('/api/admin/players/pin/reset', {
+        const res = await fetch(withTenant('/api/admin/players/pin/reset'), {
           method:'POST',
           headers: {
             'Content-Type':'application/json',
@@ -1095,7 +1108,7 @@
       });
 
       $('#loadPlayersBtn')?.addEventListener('click', async ()=>{
-        const res = await fetch('/api/admin/players', {
+        const res = await fetch(withTenant('/api/admin/players'), {
           headers: { 'x-admin-token': localStorage.getItem('admin_token') || '' }
         });
         const list = res.ok ? await res.json() : [];

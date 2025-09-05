@@ -1,65 +1,160 @@
-// routes/admin_auth.js Ã¢â‚¬" admin login & first-run password bootstrap
+// routes/admin_auth.js — per-tenant admin auth (token OR password), with bootstrap + session cookie
+
 const express = require('express');
-const path = require('path');
-const { readFile } = require('fs/promises');
-const bcrypt = require('bcryptjs');
-const { writeJsonAtomic } = require('../utils/atomicJson');
-
 const router = express.Router();
+const crypto = require('crypto');
+const fs = require('fs');
+const fsp = require('fs/promises');
+const path = require('path');
+const bcrypt = require('bcryptjs');
 
-const ADMIN_FILE = path.join(__dirname, '..', 'data', 'admin.json');
-const isProd = process.env.NODE_ENV === 'production';
+const ADMIN_TOKEN = (process.env.ADMIN_TOKEN || '').trim();
+const IS_PROD = process.env.NODE_ENV === 'production' || !!process.env.RENDER;
 
-// helpers
-async function readAdmin() {
-  try { return JSON.parse(await readFile(ADMIN_FILE, 'utf8')); }
-  catch { return {}; }
+router.use(express.json());
+
+/* ---------------- utils ---------------- */
+function safeEqual(a = '', b = '') {
+  const A = Buffer.from(String(a));
+  const B = Buffer.from(String(b));
+  return A.length === B.length && crypto.timingSafeEqual(A, B);
 }
-async function writeAdmin(obj) { await writeJsonAtomic(ADMIN_FILE, obj); }
 
-function sanitizeToken(s = '') {
-  return String(s).replace(/\r/g,'').replace(/\s+#.*$/,'').replace(/^\s*['"]|['"]\s*$/g,'').trim();
+function adminDataFile(req) {
+  // tenant-aware store; falls back to global DATA_DIR if tenant ctx missing
+  const base = (req.ctx && req.ctx.dataDir) || require('../lib/paths').DATA_DIR;
+  const dir = path.join(base, 'admin');
+  try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+  return path.join(dir, 'auth.json');
 }
-const ADMIN_TOKEN = sanitizeToken(process.env.ADMIN_TOKEN || ''); // you already use this to gate admin APIs
 
-// GET /api/admin/state -> { bootstrap_required: true|false }
-router.get('/state', async (_req, res) => {
-  const a = await readAdmin();
-  res.json({ bootstrap_required: !a.pass_hash });
-});
-
-// POST /api/admin/bootstrap { new_password }  (only allowed if no password set yet)
-router.post('/bootstrap', express.json(), async (req, res) => {
-  const { new_password } = req.body || {};
-  const a = await readAdmin();
-  if (a.pass_hash) return res.status(409).json({ ok:false, error:'already_set' });
-  if (!new_password || String(new_password).trim().length < 6) {
-    return res.status(400).json({ ok:false, error:'weak_password' });
+async function readAuth(req) {
+  try {
+    const txt = await fsp.readFile(adminDataFile(req), 'utf8');
+    return JSON.parse(txt);
+  } catch {
+    return {};
   }
-  const pass_hash = await bcrypt.hash(String(new_password), 10);
-  await writeAdmin({ pass_hash, set_at: new Date().toISOString() });
-  return res.json({ ok:true });
+}
+async function writeAuth(req, obj) {
+  await fsp.writeFile(adminDataFile(req), JSON.stringify(obj, null, 2), 'utf8');
+}
+
+// very light JWT-ish cookie using ADMIN_TOKEN as HMAC secret
+function b64u(buf) { return Buffer.from(buf).toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
+function b64uJSON(obj) { return b64u(JSON.stringify(obj)); }
+function sign(payloadStr) {
+  const h = crypto.createHmac('sha256', ADMIN_TOKEN || 'dev');
+  h.update(payloadStr);
+  return b64u(h.digest());
+}
+function makeSessionToken(claims) {
+  const p = b64uJSON(claims);
+  const s = sign(p);
+  return `v1.${p}.${s}`;
+}
+function verifySessionToken(tok) {
+  if (!tok || typeof tok !== 'string') return null;
+  const parts = tok.split('.');
+  if (parts.length !== 3 || parts[0] !== 'v1') return null;
+  const [ , payload, sig ] = parts;
+  if (sign(payload) !== sig) return null;
+  try {
+    const claims = JSON.parse(Buffer.from(payload.replace(/-/g,'+').replace(/_/g,'/'), 'base64').toString('utf8'));
+    if (!claims || typeof claims !== 'object') return null;
+    if (typeof claims.exp === 'number' && claims.exp < Date.now()) return null;
+    return claims;
+  } catch { return null; }
+}
+function setSessionCookie(res, token) {
+  res.cookie('admin_session', token, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: IS_PROD,
+    maxAge: 7 * 24 * 3600 * 1000, // 7 days
+    path: '/api/admin'
+  });
+}
+
+/* ---------------- public-ish helpers ---------------- */
+
+// Check state (no auth required): do we have a password set for this tenant?
+router.get('/auth/state', async (req, res) => {
+  const a = await readAuth(req);
+  res.json({ ok: true, tenant: (req.ctx && req.ctx.tenant) || null, has_password: !!a.password_hash });
 });
 
-// POST /api/admin/login { password } -> { ok:true, token }
-router.post('/login', express.json(), async (req, res) => {
+// One-time bootstrap: set password if none exists (guarded by admin token)
+router.post('/_bootstrap', async (req, res) => {
+  if (!ADMIN_TOKEN) return res.status(403).json({ ok: false, error: 'admin_disabled' });
+  const hdr = (req.get('x-admin-token') || '').trim();
+  if (!safeEqual(hdr, ADMIN_TOKEN)) return res.status(403).json({ ok: false, error: 'forbidden' });
+
   const { password } = req.body || {};
-  const a = await readAdmin();
-
-  // First run: no password yet Ã¢â€ ' tell client to bootstrap
-  if (!a.pass_hash) {
-    return res.status(409).json({ ok:false, error:'bootstrap_required' });
+  if (!password || String(password).length < 6) {
+    return res.status(400).json({ ok: false, error: 'password_too_short' });
   }
+  const a = await readAuth(req);
+  if (a.password_hash) return res.status(409).json({ ok: false, error: 'already_set' });
 
-  const ok = await bcrypt.compare(String(password || ''), a.pass_hash);
-  if (!ok) return res.status(401).json({ ok:false, error:'bad_password' });
+  const hash = await bcrypt.hash(String(password), 10);
+  await writeAuth(req, { password_hash: hash, updated_at: new Date().toISOString() });
 
-  // hand back the configured admin token; client stores in localStorage and uses x-admin-token header
-  if (!ADMIN_TOKEN) return res.status(500).json({ ok:false, error:'admin_token_missing' });
-  return res.json({ ok:true, token: ADMIN_TOKEN });
+  const token = makeSessionToken({
+    tenant: (req.ctx && req.ctx.tenant) || 'default',
+    iat: Date.now(),
+    exp: Date.now() + 24 * 3600 * 1000
+  });
+  setSessionCookie(res, token);
+  res.json({ ok: true, bootstrapped: true });
 });
 
-// optional logout (clear any client-side state if you decide to set cookies later)
-router.post('/logout', (_req, res) => res.json({ ok:true }));
+// Login with password → sets cookie
+router.post('/_login', async (req, res) => {
+  const { password } = req.body || {};
+  const a = await readAuth(req);
+  if (!a.password_hash) return res.status(400).json({ ok: false, error: 'no_password_set' });
+
+  const ok = password && await bcrypt.compare(String(password), a.password_hash);
+  if (!ok) return res.status(401).json({ ok: false, error: 'bad_password' });
+
+  const token = makeSessionToken({
+    tenant: (req.ctx && req.ctx.tenant) || 'default',
+    iat: Date.now(),
+    exp: Date.now() + 24 * 3600 * 1000
+  });
+  setSessionCookie(res, token);
+  res.json({ ok: true, login: true });
+});
+
+// Alias for UIs that call without underscore
+router.post('/login', async (req, res) => {
+  const { password } = req.body || {};
+  req.url = '/_login'; // delegate
+  return router.handle(req, res);
+});
+
+router.post('/_logout', (req, res) => {
+  res.clearCookie('admin_session', { path: '/api/admin' });
+  res.json({ ok: true });
+});
+
+/* ---------------- guard the rest of /api/admin ---------------- */
+
+// allow header token OR valid session cookie
+router.use((req, res, next) => {
+  if (ADMIN_TOKEN) {
+    const hdr = (req.get('x-admin-token') || '').trim();
+    if (safeEqual(hdr, ADMIN_TOKEN)) return next();
+  }
+  const cookie = (req.cookies && req.cookies.admin_session) || '';
+  const claims = verifySessionToken(cookie);
+  const tenant = (req.ctx && req.ctx.tenant) || 'default';
+  if (claims && claims.tenant === tenant) return next();
+  return res.status(403).json({ ok: false, error: 'forbidden' });
+});
+
+// Minimal health (after auth)
+router.get('/health', (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 
 module.exports = router;

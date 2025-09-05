@@ -1,74 +1,152 @@
-// routes/fixtures.js — robust fixtures API (query or param), no 404s
-
+// routes/fixtures.js — tenant-aware fixtures reader (robust + BOM-safe + normalised)
 const express = require('express');
-const router = express.Router();
 const path = require('path');
 const fs = require('fs');
-const fsp = require('fs/promises');
-const { DATA_DIR } = require('../lib/paths');
 
-// Keep defaults aligned with index.js
-const DEFAULT_CONFIG = {
-  season: 2025,
-  total_weeks: 38,
-  current_week: 1,
-  lock_minutes_before_kickoff: 10,
-  deadline_mode: 'first_kickoff',
-  timezone: 'Australia/Melbourne',
-};
+const router = express.Router();
+router.use(express.json());
 
-function readConfig() {
-  const cfgPath = path.join(DATA_DIR, 'config.json');
+/* ---------------- IO helpers ---------------- */
+function readText(p) {
+  return fs.readFileSync(p, 'utf8');
+}
+function stripBOM(s) {
+  if (!s) return s;
+  // Remove UTF-8 BOM if present
+  return s.charCodeAt(0) === 0xFEFF ? s.slice(1) : s;
+}
+function readJson(p, fb) {
   try {
-    const raw = fs.readFileSync(cfgPath, 'utf8');
-    const obj = JSON.parse(raw);
-    return { ...DEFAULT_CONFIG, ...obj };
+    const raw = stripBOM(readText(p));
+    return JSON.parse(raw);
   } catch {
-    return { ...DEFAULT_CONFIG };
+    return fb;
   }
 }
+function fileExists(p) {
+  try { fs.accessSync(p, fs.constants.R_OK); return true; } catch { return false; }
+}
+function statSize(p) {
+  try { return fs.statSync(p).size || 0; } catch { return 0; }
+}
 
-async function readFixturesForWeek(season, week) {
-  // Support both layouts:
-  //   /fixtures/season-YYYY/week-N.json
-  //   /fixtures/season-YYYY/weeks/week-N.json
-  const base = path.join(DATA_DIR, 'fixtures', `season-${season}`);
+/* ---------------- Config helpers ---------------- */
+function cfgPath(req) {
+  const base = req?.ctx?.dataDir || process.env.DATA_DIR || path.join(__dirname, '..', 'data');
+  return path.join(base, 'config.json');
+}
+function readConfig(req) {
+  const cfg = readJson(cfgPath(req), {});
+  return { season: Number(cfg.season) || new Date().getFullYear(), ...cfg };
+}
+
+/* ---------------- Normaliser ---------------- */
+function pick(obj, ...keys) { for (const k of keys) if (obj && obj[k] != null) return obj[k]; return undefined; }
+
+function normaliseOne(raw, idx = 0) {
+  // id variants
+  const id = String(
+    pick(raw, 'id', 'matchId', 'code', '_id', 'match_id') ??
+    `w${idx + 1}`
+  );
+
+  // home/away team name variants (string or nested object)
+  const hObj = pick(raw, 'home', 'homeTeam', 'home_team');
+  const aObj = pick(raw, 'away', 'awayTeam', 'away_team');
+
+  const home = typeof hObj === 'object' && hObj ? (hObj.name ?? hObj.team ?? hObj.title ?? 'Home') : (hObj ?? 'Home');
+  const away = typeof aObj === 'object' && aObj ? (aObj.name ?? aObj.team ?? aObj.title ?? 'Away') : (aObj ?? 'Away');
+
+  // kickoff variants
+  const ko = pick(raw, 'kickoff_iso', 'kickoffISO', 'kickoff', 'utcDate', 'kickoff_utc');
+
+  // produce a superset so old UIs also work
+  return {
+    id,
+    home,
+    away,
+    kickoff_iso: ko || null,
+    // legacy-friendly mirrors
+    homeTeam: home,
+    awayTeam: away,
+    kickoffISO: ko || null,
+  };
+}
+
+function normaliseList(any) {
+  if (!any) return [];
+  if (Array.isArray(any)) return any.map(normaliseOne);
+
+  // { fixtures:[...] } or { matches:[...] }
+  if (Array.isArray(any.fixtures)) return any.fixtures.map(normaliseOne);
+  if (Array.isArray(any.matches))  return any.matches.map(normaliseOne);
+
+  // Map keyed by id → values are the rows
+  if (any && typeof any === 'object') {
+    const out = [];
+    let i = 0;
+    for (const [id, v] of Object.entries(any)) {
+      const row = normaliseOne({ id, ...(v || {}) }, i++);
+      out.push(row);
+    }
+    return out;
+  }
+
+  return [];
+}
+
+/* ---------------- Route ---------------- */
+router.get('/', (req, res) => {
+  res.set('Cache-Control', 'no-store, max-age=0');
+
+  const cfg    = readConfig(req);
+  const week   = Math.max(1, parseInt(req.query.week, 10) || 1);
+  const season = parseInt(req.query.season, 10) || cfg.season;
+
+  const tenantDir = req?.ctx?.dataDir || process.env.DATA_DIR || path.join(__dirname, '..', 'data');
+  const globalDir = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
+
+  // Prefer tenant path; fall back to legacy/global
   const candidates = [
-    path.join(base, `week-${week}.json`),
-    path.join(base, 'weeks', `week-${week}.json`),
+    path.join(tenantDir, 'fixtures', `season-${season}`, `week-${week}.json`),
+    path.join(tenantDir, 'fixtures', `season-${season}`, 'weeks', `week-${week}.json`),
+
+    // legacy/global fallbacks (in case tenant wasn’t used in older data)
+    path.join(globalDir, 'fixtures', `season-${season}`, `week-${week}.json`),
+    path.join(globalDir, 'fixtures', `season-${season}`, 'weeks', `week-${week}.json`),
+
+    // super-legacy single-level
+    path.join(tenantDir, 'fixtures', `week-${week}.json`),
+    path.join(globalDir, 'fixtures', `week-${week}.json`),
   ];
 
+  let foundFile = null;
+  let fixtures  = [];
+
   for (const p of candidates) {
-    try {
-      const txt = await fsp.readFile(p, 'utf8');
-      const json = JSON.parse(txt);
-      if (Array.isArray(json)) return json;
-      if (json && Array.isArray(json.fixtures)) return json.fixtures;
-      // Unexpected shape — return empty but don't throw
-      return [];
-    } catch {
-      // try next candidate
-    }
+    if (!fileExists(p)) continue;
+    const data = readJson(p, null);
+    if (!data) continue; // parse failed (e.g., BOM without strip) → keep looking
+    foundFile = p;
+    fixtures = normaliseList(data);
+    break;
   }
-  return []; // not found -> return empty (200), never 404
-}
 
-// GET /api/fixtures?week=3[&season=2025]
-router.get('/', async (req, res) => {
-  const cfg = readConfig();
-  const season = parseInt(req.query.season, 10) || cfg.season || DEFAULT_CONFIG.season;
-  const week = Math.max(1, parseInt(req.query.week, 10) || cfg.current_week || 1);
-  const data = await readFixturesForWeek(season, week);
-  return res.json(data);
-});
+  if (String(req.query.debug) === '1') {
+    return res.json({
+      ok: true,
+      tenant: req?.ctx?.tenant || null,
+      dataDir: tenantDir,
+      season, week,
+      candidates: candidates.map(p => ({ path: p, exists: fileExists(p), size: statSize(p) })),
+      foundFile,
+      count: fixtures.length,
+      sample: fixtures[0] || null,
+      sampleKeysIfUnparsed: null
+    });
+  }
 
-// GET /api/fixtures/3  (optional season override via ?season=2025)
-router.get('/:week', async (req, res) => {
-  const cfg = readConfig();
-  const season = parseInt(req.query.season, 10) || cfg.season || DEFAULT_CONFIG.season;
-  const week = Math.max(1, parseInt(req.params.week, 10) || cfg.current_week || 1);
-  const data = await readFixturesForWeek(season, week);
-  return res.json(data);
+  return res.json(fixtures);
 });
 
 module.exports = router;
