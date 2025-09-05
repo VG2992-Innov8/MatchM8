@@ -478,9 +478,9 @@
         const id = String(inp.getAttribute('data-id'));
         const side = inp.getAttribute('data-side');
         const v = inp.value === '' ? null : Number(inp.value);
-        if (!map[id]) map[id] = { homeGoals: null, awayGoals: null };
-        if (side === 'home') map[id].homeGoals = v;
-        if (side === 'away') map[id].awayGoals = v;
+        if (!map[id]) map[id] = { home: null, away: null };
+        if (side === 'home') map[id].home = v;
+        if (side === 'away') map[id].away = v;
       });
 
       const btn = document.getElementById('btnSaveResults');
