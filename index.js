@@ -1,9 +1,14 @@
 // index.js — MatchM8 server (prod-ready with ephemeral fallback + seeding + per-request tenant meta)
-const fs = require('fs');
+const fs   = require('fs');
 const path = require('path');
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 
-// One-time reset controlled by env vars
+// SINGLE source of truth
+const { DATA_DIR } = require('./lib/paths');   // keep this
+
+// (optional alias if you like the name in your code)
+const BASE_DATA_DIR = DATA_DIR;
+
+// wipe-on-boot block can use DATA_DIR
 (function wipeOnBoot() {
   try {
     if (process.env.RESET_ALL === '1') {
@@ -14,12 +19,12 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
       fs.rmSync(path.join(DATA_DIR, 'tenants', t), { recursive: true, force: true });
       console.log(`[RESET] Wiped tenant ${t}`);
     }
-    // ensure base exists
     fs.mkdirSync(path.join(DATA_DIR, 'tenants'), { recursive: true });
   } catch (e) {
     console.error('[RESET] Error:', e);
   }
 })();
+
 
 
 
@@ -71,7 +76,6 @@ const SKIP_LICENSE = String(process.env.DEMO_SKIP_LICENSE || '').toLowerCase() =
  * Data for each request is isolated under:  <BASE_DATA_DIR>/tenants/<TENANT>/
  * We set req.ctx = { tenant, dataDir } for any downstream routes.
  */
-const BASE_DATA_DIR = process.env.DATA_DIR;
 
 function parseTenantMap() {
   try { return JSON.parse(process.env.TENANT_MAP || '{}'); }
@@ -96,7 +100,7 @@ function resolveTenant(req) {
 function tenantMiddleware(req, _res, next) {
   try {
     const tenant = resolveTenant(req);
-    const dataDir = path.join(BASE_DATA_DIR, 'tenants', tenant);
+    const dataDir = path.join(DATA_DIR, 'tenants', tenant);
     fs.mkdirSync(dataDir, { recursive: true });
     req.ctx = { tenant, dataDir };
   } catch {
