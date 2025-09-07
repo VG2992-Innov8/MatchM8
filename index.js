@@ -1,6 +1,27 @@
 // index.js — MatchM8 server (prod-ready with ephemeral fallback + seeding + per-request tenant meta)
-const path = require('path');
 const fs = require('fs');
+const path = require('path');
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+
+// One-time reset controlled by env vars
+(function wipeOnBoot() {
+  try {
+    if (process.env.RESET_ALL === '1') {
+      fs.rmSync(path.join(DATA_DIR, 'tenants'), { recursive: true, force: true });
+      console.log('[RESET] Wiped ALL tenants');
+    } else if (process.env.RESET_TENANT) {
+      const t = process.env.RESET_TENANT;
+      fs.rmSync(path.join(DATA_DIR, 'tenants', t), { recursive: true, force: true });
+      console.log(`[RESET] Wiped tenant ${t}`);
+    }
+    // ensure base exists
+    fs.mkdirSync(path.join(DATA_DIR, 'tenants'), { recursive: true });
+  } catch (e) {
+    console.error('[RESET] Error:', e);
+  }
+})();
+
+
 
 // ------------- Load & sanitize environment -------------
 require('dotenv').config({ path: path.join(__dirname, '.env'), override: true });
