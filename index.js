@@ -2,13 +2,32 @@
 const fs   = require('fs');
 const path = require('path');
 
-// SINGLE source of truth
-const { DATA_DIR } = require('./lib/paths');   // keep this
+// ---------- Load env FIRST so DATA_DIR is available to lib/paths ----------
+require('dotenv').config({ path: path.join(__dirname, '.env'), override: true });
 
-// (optional alias if you like the name in your code)
-const BASE_DATA_DIR = DATA_DIR;
+// If DATA_DIR not provided (e.g., free/ephemeral), give lib/paths something writable.
+if (!process.env.DATA_DIR) {
+  const fallback = process.env.RENDER ? '/tmp/matchm8-data' : path.join(__dirname, 'data');
+  process.env.DATA_DIR = fallback;
+  console.log(`[boot] DATA_DIR not set; using ${fallback} ${process.env.RENDER ? '(ephemeral)' : ''}`);
+}
 
-// wipe-on-boot block can use DATA_DIR
+// ---------- SINGLE source of truth for the data directory ----------
+const { DATA_DIR } = require('./lib/paths');   // <- keep only this
+const BASE_DATA_DIR = DATA_DIR;                // optional alias if referenced elsewhere
+
+// Clean up a few env values (after dotenv)
+function cleanToken(s = '') {
+  return String(s)
+    .replace(/\r/g, '')
+    .replace(/\s+#.*$/, '')
+    .replace(/^\s*['"]|['"]\s*$/g, '')
+    .trim();
+}
+if (process.env.ADMIN_TOKEN)       process.env.ADMIN_TOKEN       = cleanToken(process.env.ADMIN_TOKEN);
+if (process.env.LICENSE_PUBKEY_B64) process.env.LICENSE_PUBKEY_B64 = cleanToken(process.env.LICENSE_PUBKEY_B64);
+
+// ---------- One-time reset controlled by env vars ----------
 (function wipeOnBoot() {
   try {
     if (process.env.RESET_ALL === '1') {
@@ -19,34 +38,12 @@ const BASE_DATA_DIR = DATA_DIR;
       fs.rmSync(path.join(DATA_DIR, 'tenants', t), { recursive: true, force: true });
       console.log(`[RESET] Wiped tenant ${t}`);
     }
+    // always ensure base exists
     fs.mkdirSync(path.join(DATA_DIR, 'tenants'), { recursive: true });
   } catch (e) {
     console.error('[RESET] Error:', e);
   }
 })();
-
-
-
-
-// ------------- Load & sanitize environment -------------
-require('dotenv').config({ path: path.join(__dirname, '.env'), override: true });
-
-function cleanToken(s = '') {
-  return String(s)
-    .replace(/\r/g, '')
-    .replace(/\s+#.*$/, '')
-    .replace(/^\s*['"]|['"]\s*$/g, '')
-    .trim();
-}
-if (process.env.ADMIN_TOKEN) process.env.ADMIN_TOKEN = cleanToken(process.env.ADMIN_TOKEN);
-if (process.env.LICENSE_PUBKEY_B64) process.env.LICENSE_PUBKEY_B64 = cleanToken(process.env.LICENSE_PUBKEY_B64);
-
-// If DATA_DIR not provided (e.g., Render Free), default to /tmp (ephemeral) so writes succeed.
-if (!process.env.DATA_DIR) {
-  const fallback = process.env.RENDER ? '/tmp/matchm8-data' : path.join(__dirname, 'data');
-  process.env.DATA_DIR = fallback;
-  console.log(`[boot] DATA_DIR not set; using ${fallback} ${process.env.RENDER ? '(ephemeral)' : ''}`);
-}
 
 // 🔒 Lock to prod
 const APP_MODE = 'prod';
@@ -57,11 +54,10 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const cookieParser = require('cookie-parser');
 const crypto = require('crypto');
+
 // node-fetch polyfill (optional)
 const fetchFn = (...args) =>
   import('node-fetch').then(({ default: f }) => f(...args)).catch(() => fetch(...args));
-
-const { DATA_DIR } = require('./lib/paths'); // central data dir (reads env DATA_DIR or ./data)
 
 // ⬇️ NEW: dev bypass flag for license-protected routes
 const SKIP_LICENSE = String(process.env.DEMO_SKIP_LICENSE || '').toLowerCase() === 'true';
@@ -69,14 +65,12 @@ const SKIP_LICENSE = String(process.env.DEMO_SKIP_LICENSE || '').toLowerCase() =
 /* -------------------- Per-request TENANT context --------------------
  * TENANT selection rules (in priority order):
  * 1) TENANT_MAP JSON env maps request hostname -> tenant slug
- * 2) ALLOW_TENANT_OVERRIDE=true lets you pass ?t=TENANT or header x-tenant: TENANT (handy on one URL)
- * 3) TENANT env fallback (lets you run without DNS/subdomains)
+ * 2) ALLOW_TENANT_OVERRIDE=true lets you pass ?t=TENANT or header x-tenant: TENANT
+ * 3) TENANT env fallback
  * 4) 'default'
- *
- * Data for each request is isolated under:  <BASE_DATA_DIR>/tenants/<TENANT>/
- * We set req.ctx = { tenant, dataDir } for any downstream routes.
+ * Data for each request is under:  <DATA_DIR>/tenants/<TENANT>/
+ * We set req.ctx = { tenant, dataDir } for downstream routes.
  */
-
 function parseTenantMap() {
   try { return JSON.parse(process.env.TENANT_MAP || '{}'); }
   catch { return {}; }
@@ -89,8 +83,6 @@ function resolveTenant(req) {
     .split(':')[0].toLowerCase();
 
   let t = map[host];
-
-  // Optional override for testing without DNS
   if (!t && process.env.ALLOW_TENANT_OVERRIDE === 'true') {
     t = req.query.t || req.get('x-tenant');
   }
@@ -138,8 +130,8 @@ ensureDataDirsAndSeed();
 
 // ----- App setup -----
 const app = express();
-app.set('trust proxy', 1); // ✅ for Render/Railway/any proxy
-const PORT = process.env.PORT || 3000; // ✅ use platform port if provided
+app.set('trust proxy', 1);               // ✅ for Render/Railway/any proxy
+const PORT = process.env.PORT || 3000;   // ✅ use platform port if provided
 
 const joinRepo = (...p) => path.join(__dirname, ...p);
 const joinData = (...p) => path.join(DATA_DIR, ...p);
@@ -155,7 +147,7 @@ const DEFAULT_CONFIG = {
   timezone: 'Australia/Melbourne',
 };
 
-// helpers to read/write config.json safely (global config)
+// helpers to read/write global config.json safely
 function readConfig() {
   try {
     const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
@@ -170,7 +162,7 @@ function writeConfig(cfg) {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
 }
 
-/* ---- TENANT config helpers (NEW) ---- */
+/* ---- TENANT config helpers ---- */
 function cfgPathFor(req) {
   const base = req?.ctx?.dataDir || DATA_DIR;
   return path.join(base, 'config.json');
@@ -190,7 +182,7 @@ function writeConfigFor(req, cfg) {
   fs.writeFileSync(cfgPathFor(req), JSON.stringify(cfg, null, 2));
 }
 
-// timing-safe admin-token guard (used only where needed)
+// timing-safe admin-token guard
 function timingSafeEqual(a = '', b = '') {
   const A = Buffer.from(a);
   const B = Buffer.from(b);
@@ -212,7 +204,7 @@ license.loadAndValidate().then(s => {
   console.log('License:', s.reason);
 });
 
-// Simple license gate middleware (no demo/bypass)
+// Simple license gate middleware
 function requireValidLicense(_req, res, next) {
   const s = license.getStatus();
   if (!s.ok) return res.status(403).json({ error: 'License invalid: ' + s.reason });
@@ -220,8 +212,6 @@ function requireValidLicense(_req, res, next) {
 }
 
 // -------------------- Global middleware --------------------
-
-// CORS allowlist via env: CORS_ORIGIN="http://localhost:3000,https://your.site"
 const ALLOW = (process.env.CORS_ORIGIN || '')
   .split(',').map(s => s.trim()).filter(Boolean);
 
@@ -234,12 +224,7 @@ if (ALLOW.length) {
   app.use(cors());
 }
 
-// Security headers (disable CSP so admin UI inline scripts work)
-app.use(helmet({
-  contentSecurityPolicy: false,
-}));
-
-// Light rate-limit on admin API surface
+app.use(helmet({ contentSecurityPolicy: false }));         // allow inline admin UI scripts
 const adminLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200 });
 app.use('/api/admin', adminLimiter);
 
@@ -247,14 +232,14 @@ app.use(cookieParser());
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false }));
 
-// 🔑 Per-request TENANT context (enable now; routers can adopt later)
+// 🔑 Per-request TENANT context
 app.use(tenantMiddleware);
 
-// Health (Render/Railway)
+// Health
 app.get('/health', (_req, res) => res.json({ ok: true, mode: APP_MODE, ts: Date.now() }));
-app.get('/healthz', (_req, res) => res.status(200).send('ok')); // legacy/simple
+app.get('/healthz', (_req, res) => res.status(200).send('ok'));
 
-// Quick meta to see which tenant/folder this request is pointing at
+// Quick meta
 app.get('/api/__meta', (req, res) => {
   res.json({
     ok: true,
@@ -264,21 +249,34 @@ app.get('/api/__meta', (req, res) => {
   });
 });
 
-// ✅ Public READ results (tenant-aware) — cleaned to hide empty seed keys
+// ✅ Public READ results (tenant-aware) — normalize legacy shapes
 app.get('/api/results', (req, res) => {
   try {
     const wk = Math.max(1, parseInt(req.query.week, 10) || 1);
     const p = path.join(req.ctx.dataDir, 'results', `week-${wk}.json`);
     let obj = {};
     try { obj = JSON.parse(fs.readFileSync(p, 'utf8')); } catch {}
-    // remove placeholder/empty entries — keep only objects with a recognizable score shape
+
+    const normalize = (v) => {
+      if (!v || typeof v !== 'object') return null;
+      const shapes = [
+        ['home','away'],
+        ['home_score','away_score'],
+        ['homeGoals','awayGoals'],
+        ['h','a']
+      ];
+      for (const [hk, ak] of shapes) {
+        let h = v[hk], a = v[ak];
+        if (h != null && a != null) {
+          h = parseInt(h, 10); a = parseInt(a, 10);
+          if (Number.isFinite(h) && Number.isFinite(a)) return { home: h, away: a };
+        }
+      }
+      return null;
+    };
+
     const cleaned = Object.fromEntries(
-      Object.entries(obj).filter(([_, v]) =>
-        v && typeof v === 'object' && (
-          (Object.prototype.hasOwnProperty.call(v, 'home') && Object.prototype.hasOwnProperty.call(v, 'away')) ||
-          (Object.prototype.hasOwnProperty.call(v, 'home_score') && Object.prototype.hasOwnProperty.call(v, 'away_score'))
-        )
-      )
+      Object.entries(obj).map(([k, v]) => [k, normalize(v)]).filter(([,nv]) => !!nv)
     );
     res.json({ ok: true, week: wk, results: cleaned });
   } catch (e) {
@@ -286,16 +284,15 @@ app.get('/api/results', (req, res) => {
   }
 });
 
-// Tenant-aware aliases for legacy static links (/data/fixtures|results|scores/*)
-// Tries the per-request tenant folder first (req.ctx.dataDir), then falls back to global static mounts.
+// Tenant-aware aliases for legacy static links
 app.get(/^\/data\/(fixtures|results|scores)\/(.+)$/, (req, res, next) => {
   try {
-    const bucket = req.params[0];  // fixtures | results | scores
-    const rest   = req.params[1];  // path after the bucket
+    const bucket = req.params[0];
+    const rest   = req.params[1];
     const p = path.join(req.ctx?.dataDir || DATA_DIR, bucket, rest);
     if (fs.existsSync(p)) return res.sendFile(p);
-  } catch (_) { /* fall through */ }
-  next(); // let the global static handler try, or 404 if missing
+  } catch {}
+  next();
 });
 
 // Global/static fallbacks (serve repo-level data if present)
@@ -305,7 +302,6 @@ app.use('/data/fixtures', express.static(joinData('fixtures')));
 // Public assets
 app.use(express.static(joinRepo('public')));
 app.use('/ui', express.static(joinRepo('ui')));
-
 
 // Fix old encoded URLs (legacy)
 app.use((req, res, next) => {
@@ -317,15 +313,11 @@ app.use((req, res, next) => {
 });
 
 /* -------------------- /api/config -------------------- */
-// Public GET: players & UI read season info (TENANT-AWARE)
 app.get('/api/config', (req, res) => res.json(readConfigFor(req)));
-
-// Admin POST: save season settings etc. (TENANT-AWARE)
 app.post('/api/config', requireAdminToken, (req, res) => {
   const prev = readConfigFor(req);
   const next = { ...prev, ...req.body };
 
-  // coercions/sanity
   if ('total_weeks' in req.body) next.total_weeks = Math.max(1, parseInt(req.body.total_weeks, 10) || prev.total_weeks);
   if ('current_week' in req.body) next.current_week = Math.max(1, parseInt(req.body.current_week, 10) || prev.current_week);
   if ('lock_minutes_before_kickoff' in req.body) next.lock_minutes_before_kickoff = Math.max(0, parseInt(req.body.lock_minutes_before_kickoff, 10) || 0);
@@ -338,6 +330,8 @@ app.post('/api/config', requireAdminToken, (req, res) => {
 });
 
 /* -------------------- Safe require + mount -------------------- */
+const mounted = []; // ← define ONCE, up here
+
 function safeRequire(label, p) {
   try {
     const mod = require(p);
@@ -348,11 +342,11 @@ function safeRequire(label, p) {
     return { ok: false, mod: null, reason: e.message };
   }
 }
+
 function mount(label, route, mod) {
   app.use(route, mod);
   mounted.push({ label, route });
 }
-const mounted = [];
 
 // Fixtures (try user route first)
 const fixtures = safeRequire('./routes/fixtures.js', './routes/fixtures');
@@ -376,7 +370,6 @@ if (fixtures.ok) {
       return res.json([]);
     }
   });
-
   mounted.push({ label: '(inline)/api/fixtures', route: '/api/fixtures' });
 }
 
@@ -387,10 +380,10 @@ if (predictions.ok) {
   mount('./routes/predictions.js', '/predictions', predictions.mod);
 }
 
-// ✅ Results — Supabase/file upsert router (mounted AFTER public GET above)
+// ✅ Results — admin/file upsert router (mounted AFTER public GET above)
 const resultsRt = safeRequire('./routes/results.js', './routes/results');
 if (resultsRt.ok) {
-  mount('./routes/results.js', '/api/results', resultsRt.mod); // exposes /upsert etc.
+  mount('./routes/results.js', '/api/results', resultsRt.mod); // e.g., /upsert endpoints
 }
 
 // Scores — license-gated (skippable in dev)
@@ -425,10 +418,7 @@ if (players.ok) {
 }
 
 /* -------------------- LICENSE ENDPOINTS -------------------- */
-// Public status
 app.get('/api/license/status', (_req, res) => res.json(license.getStatus()));
-
-// Apply license outside /api/admin (still requires x-admin-token).
 app.post('/api/license/apply', requireAdminToken, express.json(), async (req, res) => {
   try {
     const token = String(req.body?.license || '').trim();
@@ -444,8 +434,6 @@ app.post('/api/license/apply', requireAdminToken, express.json(), async (req, re
     return res.status(500).json({ ok: false, error: String(e) });
   }
 });
-
-// Legacy admin paths (kept for compatibility)
 app.post('/api/admin/license', requireAdminToken, express.json(), async (req, res) => {
   try {
     const token = String(req.body?.license || '').trim();
@@ -459,7 +447,6 @@ app.post('/api/admin/license', requireAdminToken, express.json(), async (req, re
     return res.status(500).json({ ok: false, error: String(e) });
   }
 });
-
 app.get('/api/admin/license/status', requireAdminToken, (_req, res) => {
   return res.json(license.getStatus());
 });
@@ -467,9 +454,8 @@ app.get('/api/admin/license/status', requireAdminToken, (_req, res) => {
 // ---- Admin auth (mounted BEFORE other /api/admin routes) ----
 const adminAuth = require('./routes/admin_auth');
 app.use('/api/admin', adminAuth);
-mounted.push({ label: './routes/admin_auth.js', route: '/api/admin' });
 
-// ---- Admin routes (guarded; token checks inside route impl) ----
+// ---- Admin routes ----
 const admin = safeRequire('./routes/admin.js', './routes/admin');
 if (admin.ok) {
   mount('./routes/admin.js', '/api/admin', admin.mod);
@@ -481,11 +467,9 @@ if (admin.ok) {
   if (locksRt.ok) {
     if (SKIP_LICENSE) {
       app.use('/api/locks', locksRt.mod);
-      mounted.push({ label: './routes/locks.js', route: '/api/locks' });
       console.warn('[locks] DEMO_SKIP_LICENSE=true → bypassing license checks for /api/locks');
     } else {
       app.use('/api/locks', requireValidLicense, locksRt.mod);
-      mounted.push({ label: './routes/locks.js', route: '/api/locks' });
     }
   } else {
     console.warn('Skipping ./routes/locks.js:', (locksRt.reason || 'failed to load'));
@@ -498,8 +482,8 @@ app.get('/api/__health', (req, res) =>
     ok: true,
     mounted,
     mode: APP_MODE,
-    dataDir_global: DATA_DIR,         // current global
-    tenant: req.ctx?.tenant || null,  // per-request
+    dataDir_global: DATA_DIR,
+    tenant: req.ctx?.tenant || null,
     dataDir_request: req.ctx?.dataDir || null
   })
 );
