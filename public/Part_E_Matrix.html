@@ -1,14 +1,14 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Season Leaderboard — Weekly Matrix</title>
+  <title>Season Leaderboard â€” Weekly Matrix</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="icon" href="/favicon.ico">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body class="page">
-  <div id="hero" data-page="Season — Weekly Matrix"></div>
+  <div id="hero" data-page="Season â€” Weekly Matrix"></div>
   <script src="/hero.js" defer></script>
 
   <!-- Identity header (player + tenant selector) -->
@@ -112,7 +112,7 @@
         tbody.appendChild(tr);
       }
 
-      meta.textContent = `Players: ${rows.length} · Showing weeks ${weeks[0]}–${weeks[weeks.length - 1]} (season-to-date totals)`;
+      meta.textContent = `Players: ${rows.length} Â· Showing weeks ${weeks[0]}â€“${weeks[weeks.length - 1]} (season-to-date totals)`;
     }
 
     async function load() {
@@ -138,5 +138,7 @@
 
     load();
   </script>
+  <script src="/js/tenant.js"></script>
 </body>
 </html>
+
