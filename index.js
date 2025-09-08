@@ -2,8 +2,11 @@
 const fs   = require('fs');
 const path = require('path');
 
-// ---------- Load env FIRST so DATA_DIR is available to lib/paths ----------
-require('dotenv').config({ path: path.join(__dirname, '.env'), override: true });
+// ---------- Load .env only in local/dev (never override Render env) ----------
+if (!process.env.RENDER) {
+  require('dotenv').config({ path: path.join(__dirname, '.env'), override: false });
+}
+
 
 // If DATA_DIR not provided (e.g., free/ephemeral), give lib/paths something writable.
 if (!process.env.DATA_DIR) {
