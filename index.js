@@ -7,7 +7,6 @@ if (!process.env.RENDER) {
   require('dotenv').config({ path: path.join(__dirname, '.env'), override: false });
 }
 
-
 // If DATA_DIR not provided (e.g., free/ephemeral), give lib/paths something writable.
 if (!process.env.DATA_DIR) {
   const fallback = process.env.RENDER ? '/tmp/matchm8-data' : path.join(__dirname, 'data');
@@ -27,7 +26,7 @@ function cleanToken(s = '') {
     .replace(/^\s*['"]|['"]\s*$/g, '')
     .trim();
 }
-if (process.env.ADMIN_TOKEN)       process.env.ADMIN_TOKEN       = cleanToken(process.env.ADMIN_TOKEN);
+if (process.env.ADMIN_TOKEN)        process.env.ADMIN_TOKEN        = cleanToken(process.env.ADMIN_TOKEN);
 if (process.env.LICENSE_PUBKEY_B64) process.env.LICENSE_PUBKEY_B64 = cleanToken(process.env.LICENSE_PUBKEY_B64);
 
 // ---------- One-time reset controlled by env vars ----------
@@ -62,7 +61,7 @@ const crypto = require('crypto');
 const fetchFn = (...args) =>
   import('node-fetch').then(({ default: f }) => f(...args)).catch(() => fetch(...args));
 
-// ⬇️ NEW: dev bypass flag for license-protected routes
+// ⬇️ legacy global license bypass flag (dev/demo)
 const SKIP_LICENSE = String(process.env.DEMO_SKIP_LICENSE || '').toLowerCase() === 'true';
 
 /* -------------------- Per-request TENANT context --------------------
@@ -201,16 +200,75 @@ function requireAdminToken(req, res, next) {
   next();
 }
 
-// --- License wiring ---
+/* -------------------- Global license (legacy) -------------------- */
 const license = require('./lib/license');
 license.loadAndValidate().then(s => {
   console.log('License:', s.reason);
 });
-
-// Simple license gate middleware
 function requireValidLicense(_req, res, next) {
   const s = license.getStatus();
   if (!s.ok) return res.status(403).json({ error: 'License invalid: ' + s.reason });
+  next();
+}
+
+/* -------------------- Per-tenant signed license (HMAC) -------------------- */
+/* Token format:
+ * token = base64url(JSON payload) + "." + base64url(HMAC_SHA256(payload, LICENSE_SECRET))
+ * claims example: { tenant:"GEEVES-2025", plan:"Starter", seats:5, exp:"2026-01-01T00:00:00Z" }
+ */
+function b64urlEncode(bufOrStr) {
+  const b = Buffer.isBuffer(bufOrStr) ? bufOrStr : Buffer.from(String(bufOrStr));
+  return b.toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+function b64urlDecode(str) {
+  str = str.replace(/-/g,'+').replace(/_/g,'/'); while (str.length % 4) str += '=';
+  return Buffer.from(str, 'base64').toString('utf8');
+}
+function verifyTenantLicenseToken(token, secret) {
+  if (!token || typeof token !== 'string' || !token.includes('.')) return { ok:false, reason:'malformed' };
+  if (!secret) return { ok:false, reason:'missing LICENSE_SECRET' };
+  const [body, sig] = token.split('.');
+  const expected = b64urlEncode(crypto.createHmac('sha256', secret).update(body).digest());
+  if (sig !== expected) return { ok:false, reason:'bad signature' };
+  let claims;
+  try { claims = JSON.parse(b64urlDecode(body)); }
+  catch { return { ok:false, reason:'bad payload' }; }
+  return { ok:true, claims };
+}
+function getTenantLicenseClaims(req) {
+  const cfg = readConfigFor(req);
+  const token  = String(cfg.license_token || '');
+  const secret = process.env.LICENSE_SECRET || '';
+  const v = verifyTenantLicenseToken(token, secret);
+  if (!v.ok) return v;
+  const c = v.claims || {};
+  const curTenant = req.ctx?.tenant || 'default';
+  if (c.tenant && c.tenant !== curTenant) return { ok:false, reason:'tenant mismatch', claims:c };
+  if (c.exp && Date.now() > Date.parse(c.exp)) return { ok:false, reason:'expired', claims:c };
+  return { ok:true, claims:c };
+}
+function requireValidTenantLicense(req, res, next) {
+  if (String(process.env.DEMO_SKIP_LICENSE || '').toLowerCase() === 'true') return next(); // dev/demo bypass
+  const v = getTenantLicenseClaims(req);
+  if (!v.ok) return res.status(403).json({ ok:false, error: 'License invalid: ' + (v.reason || 'unknown') });
+  req.license = v.claims;
+  next();
+}
+// Optional: enforce seat cap on player creation only
+function enforceSeatLimitOnPlayerCreate(req, res, next) {
+  if (req.method.toUpperCase() !== 'POST') return next();
+  if (String(process.env.DEMO_SKIP_LICENSE || '').toLowerCase() === 'true') return next();
+  const v = getTenantLicenseClaims(req);
+  if (!v.ok) return res.status(403).json({ ok:false, error: 'No valid tenant license' });
+  const seats = Number(v.claims?.seats);
+  if (!Number.isFinite(seats) || seats <= 0) return res.status(403).json({ ok:false, error:'Seat limit not set' });
+
+  const p = path.join(req.ctx.dataDir, 'players.json');
+  let players = [];
+  try { players = JSON.parse(fs.readFileSync(p, 'utf8')); } catch {}
+  if (players.length >= seats) {
+    return res.status(403).json({ ok:false, error: `Seat limit reached (${seats})` });
+  }
   next();
 }
 
@@ -332,6 +390,22 @@ app.post('/api/config', requireAdminToken, (req, res) => {
   res.json({ ok: true, config: next });
 });
 
+/* -------------------- Tenant license endpoints -------------------- */
+// Public status for current tenant
+app.get('/api/tenant/license/status', (req, res) => {
+  const v = getTenantLicenseClaims(req);
+  res.json({ ok: v.ok, reason: v.reason || 'ok', claims: v.claims || null });
+});
+// Admin: apply/update tenant license token
+app.post('/api/tenant/license/apply', requireAdminToken, express.json(), (req, res) => {
+  const token = String(req.body?.token || '').trim();
+  if (!token) return res.status(400).json({ ok:false, error:'missing token' });
+  const cur = readConfigFor(req);
+  writeConfigFor(req, { ...cur, license_token: token });
+  const v = getTenantLicenseClaims(req);
+  res.json({ ok: v.ok, reason: v.reason || 'ok', claims: v.claims || null });
+});
+
 /* -------------------- Safe require + mount -------------------- */
 const mounted = []; // ← define ONCE, up here
 
@@ -389,21 +463,13 @@ if (resultsRt.ok) {
   mount('./routes/results.js', '/api/results', resultsRt.mod); // e.g., /upsert endpoints
 }
 
-// Scores — license-gated (skippable in dev)
+// Scores — tenant-gated (DEMO_SKIP_LICENSE bypass handled in middleware)
 const scores = safeRequire('./routes/scores.js', './routes/scores');
 if (scores.ok) {
-  if (SKIP_LICENSE) {
-    app.use('/api/scores', scores.mod);
-    app.use('/scores', scores.mod);
-    mounted.push({ label: './routes/scores.js', route: '/api/scores' });
-    mounted.push({ label: './routes/scores.js', route: '/scores' });
-    console.warn('[scores] DEMO_SKIP_LICENSE=true → bypassing license checks for /api/scores');
-  } else {
-    app.use('/api/scores', requireValidLicense, scores.mod);
-    app.use('/scores', requireValidLicense, scores.mod);
-    mounted.push({ label: './routes/scores.js', route: '/api/scores' });
-    mounted.push({ label: './routes/scores.js', route: '/scores' });
-  }
+  app.use('/api/scores', requireValidTenantLicense, scores.mod);
+  app.use('/scores',     requireValidTenantLicense, scores.mod);
+  mounted.push({ label: './routes/scores.js', route: '/api/scores' });
+  mounted.push({ label: './routes/scores.js', route: '/scores' });
 }
 
 // Auth
@@ -413,14 +479,16 @@ if (auth.ok) {
   mount('./routes/auth.js', '/auth', auth.mod);
 }
 
-// Players (optional)
+// Players — enforce seat cap ON CREATE only (no gate for GET/list)
 const players = safeRequire('./routes/players.js', './routes/players');
 if (players.ok) {
-  mount('./routes/players.js', '/api/players', players.mod);
-  mount('./routes/players.js', '/players', players.mod);
+  app.use('/api/players', enforceSeatLimitOnPlayerCreate, players.mod);
+  app.use('/players',     enforceSeatLimitOnPlayerCreate, players.mod);
+  mounted.push({ label: './routes/players.js', route: '/api/players' });
+  mounted.push({ label: './routes/players.js', route: '/players' });
 }
 
-/* -------------------- LICENSE ENDPOINTS -------------------- */
+/* -------------------- LICENSE ENDPOINTS (global legacy) -------------------- */
 app.get('/api/license/status', (_req, res) => res.json(license.getStatus()));
 app.post('/api/license/apply', requireAdminToken, express.json(), async (req, res) => {
   try {
@@ -464,16 +532,12 @@ if (admin.ok) {
   mount('./routes/admin.js', '/api/admin', admin.mod);
 }
 
-// ---- Locks route — license-gated (skippable in dev) ----
+// ---- Locks route — tenant-gated (DEMO_SKIP_LICENSE bypass handled in middleware) ----
 {
   const locksRt = safeRequire('./routes/locks.js', './routes/locks');
   if (locksRt.ok) {
-    if (SKIP_LICENSE) {
-      app.use('/api/locks', locksRt.mod);
-      console.warn('[locks] DEMO_SKIP_LICENSE=true → bypassing license checks for /api/locks');
-    } else {
-      app.use('/api/locks', requireValidLicense, locksRt.mod);
-    }
+    app.use('/api/locks', requireValidTenantLicense, locksRt.mod);
+    mounted.push({ label: './routes/locks.js', route: '/api/locks' });
   } else {
     console.warn('Skipping ./routes/locks.js:', (locksRt.reason || 'failed to load'));
   }
