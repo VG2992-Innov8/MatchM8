@@ -1,12 +1,12 @@
-// routes/scores.js — tenant-aware scorer (supports old & new predictions shapes)
+// routes/scores.js — tenant+competition-aware scorer (supports old & new predictions shapes)
 
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const fsp = require('fs/promises');
 
-// ⬇ tenant helpers
-const { BASE_DATA_DIR, joinData } = require('../lib/tenant');
+// Use DATA_DIR to resolve safe fallbacks when req.ctx is missing
+const { DATA_DIR } = require('../lib/paths');
 
 const router = express.Router();
 router.use(express.json());
@@ -29,21 +29,35 @@ function safeStat(p) {
   try { return fs.statSync(p); } catch { return null; }
 }
 
+/* ---------------- Tenant/competition roots ---------------- */
+
+function tenantSlug(req) {
+  return String(req?.ctx?.tenant || 'default');
+}
+function tenantRoot(req) {
+  // <DATA_DIR>/tenants/<TENANT>
+  return req?.ctx?.tenantDir || path.join(DATA_DIR, 'tenants', tenantSlug(req));
+}
+function compDataDir(req) {
+  // Either <tenantRoot>/competitions/<COMP> or legacy <tenantRoot>
+  return req?.ctx?.dataDir || tenantRoot(req);
+}
+function joinData(req, ...parts) {
+  return path.join(compDataDir(req), ...parts);
+}
+
 /* ---------------- Tenant path helpers ---------------- */
 
-function PRED_DIR(req) {
-  // prefer tenant; read legacy as fallback where needed
-  return joinData(req, 'predictions');
-}
-function RES_DIR(req)   { return joinData(req, 'results'); }
-function SCO_DIR(req)   { return joinData(req, 'scores'); }
-function SCO_WEEKS(req) { return path.join(SCO_DIR(req), 'weeks'); }
-function PLAYERS(req)   { return joinData(req, 'players.json'); }
-function CFG_PATH(req)  { return joinData(req, 'config.json'); }
+function PRED_DIR(req) { return joinData(req, 'predictions'); }
+function RES_DIR(req)  { return joinData(req, 'results'); }
+function SCO_DIR(req)  { return joinData(req, 'scores'); }
+function SCO_WEEKS(req){ return path.join(SCO_DIR(req), 'weeks'); }
+function PLAYERS(req)  { return joinData(req, 'players.json'); }
+function CFG_PATH(req) { return joinData(req, 'config.json'); }
 
-// legacy global (read-only fallback)
-function LEGACY_PRED_DIR() { return path.join(BASE_DATA_DIR, 'predictions'); }
-function LEGACY_RES_DIR()  { return path.join(BASE_DATA_DIR, 'results'); }
+// legacy (read-only) fallbacks at TENANT ROOT (not competition)
+function LEGACY_PRED_DIR(req) { return path.join(tenantRoot(req), 'predictions'); }
+function LEGACY_RES_DIR(req)  { return path.join(tenantRoot(req), 'results'); }
 
 /* ---------------- Normalisers ---------------- */
 
@@ -67,7 +81,6 @@ function normaliseResults(obj = {}) {
   }
   return out;
 }
-
 
 // predictions may be array rows or map keyed by player_id
 function normalisePredictions(data) {
@@ -153,7 +166,6 @@ function seasonMapToArray(map) {
 
 function rebuildSeasonTotalsFromWeeks(req) {
   const weeksDir = SCO_WEEKS(req);
-  // Read all week files and aggregate: totals & weeksPlayed per player
   const totals = new Map(); // pid -> { player_id, player, totalPoints, weeksPlayed }
   try {
     fs.mkdirSync(weeksDir, { recursive: true });
@@ -162,7 +174,7 @@ function rebuildSeasonTotalsFromWeeks(req) {
       if (!ent.isFile()) continue;
       if (!/^week-\d+\.json$/i.test(ent.name)) continue;
       const weekArr = readJson(path.join(weeksDir, ent.name), []);
-      const seenThisWeek = new Set(); // so a player doesn't get double-counted inside one file
+      const seenThisWeek = new Set();
       for (const row of weekArr) {
         const pid = String(row.player_id ?? '').trim();
         if (!pid) continue;
@@ -175,11 +187,9 @@ function rebuildSeasonTotalsFromWeeks(req) {
         totals.set(pid, cur);
       }
     }
-  } catch {
-    // ignore — we'll still merge players below
-  }
+  } catch {/* noop */}
 
-  // ⬇️ Ensure every registered player appears, even with zero totals
+  // Ensure every registered player appears, even with zero totals
   const playersArr = readJson(PLAYERS(req), []);
   for (const p of playersArr) {
     const pid = String(p.id);
@@ -195,9 +205,9 @@ function rebuildSeasonTotalsFromWeeks(req) {
 
 function computeAndPersist(req, week) {
   const predsRaw   = readJson(path.join(PRED_DIR(req), `week-${week}.json`), null)
-                   ?? readJson(path.join(LEGACY_PRED_DIR(), `week-${week}.json`), null);
+                   ?? readJson(path.join(LEGACY_PRED_DIR(req), `week-${week}.json`), null);
   const resultsRaw = readJson(path.join(RES_DIR(req),  `week-${week}.json`), null)
-                   ?? readJson(path.join(LEGACY_RES_DIR(),  `week-${week}.json`), null);
+                   ?? readJson(path.join(LEGACY_RES_DIR(req),  `week-${week}.json`), null);
 
   const predMap  = normalisePredictions(predsRaw);
   const results  = normaliseResults(resultsRaw);
@@ -207,16 +217,16 @@ function computeAndPersist(req, week) {
 
   const weekTable = computeWeekTable(week, predMap, results, playersIdx);
 
-  // Persist weekly scores (tenant paths + legacy alias for back-compat)
+  // Persist weekly scores (competition-scoped + legacy alias in comp folder)
   const weeklyOut = weekTable.map(r => ({
     player_id: r.player_id,
     player: r.name,
     weekPoints: r.week_points
   }));
   writeJson(path.join(SCO_WEEKS(req), `week-${week}.json`), weeklyOut);
-  writeJson(path.join(SCO_DIR(req),    `week-${week}.json`), weeklyOut); // legacy in-tenant
+  writeJson(path.join(SCO_DIR(req),    `week-${week}.json`), weeklyOut); // legacy in-comp (kept)
 
-  // *** Rebuild season totals from all week files (idempotent) ***
+  // Rebuild season totals from all week files (idempotent)
   const seasonTotalsArr = rebuildSeasonTotalsFromWeeks(req);
   writeJson(path.join(SCO_DIR(req), 'season-totals.json'), seasonTotalsArr);
 
@@ -232,7 +242,6 @@ function computeAndPersist(req, week) {
   const weeklyWithSeason = weeklyOut.map(r => {
     const tot = totalsMap.get(r.player_id);
     return { ...r, seasonTotal: tot ? tot.totalPoints : r.weekPoints };
-    // Note: seasonTotal is season-to-date *after* this week is saved
   });
 
   return {
@@ -246,7 +255,6 @@ function computeAndPersist(req, week) {
 /* ---------------- Small helpers for reads ---------------- */
 
 function readSavedWeekly(req, week) {
-  // Prefer canonical /scores/weeks/week-N.json; fall back to in-tenant legacy /scores/week-N.json
   const p1 = path.join(SCO_WEEKS(req), `week-${week}.json`);
   const p2 = path.join(SCO_DIR(req),    `week-${week}.json`);
   return readJson(p1, readJson(p2, null));
@@ -261,9 +269,9 @@ router.get('/', (req, res) => {
   if (!week) return res.status(400).json({ ok: false, error: 'week required' });
 
   const predsRaw   = readJson(path.join(PRED_DIR(req), `week-${week}.json`), null)
-                   ?? readJson(path.join(LEGACY_PRED_DIR(), `week-${week}.json`), null);
+                   ?? readJson(path.join(LEGACY_PRED_DIR(req), `week-${week}.json`), null);
   const resultsRaw = readJson(path.join(RES_DIR(req),  `week-${week}.json`), null)
-                   ?? readJson(path.join(LEGACY_RES_DIR(),  `week-${week}.json`), null);
+                   ?? readJson(path.join(LEGACY_RES_DIR(req),  `week-${week}.json`), null);
 
   const predMap  = normalisePredictions(predsRaw);
   const results  = normaliseResults(resultsRaw);
@@ -300,7 +308,7 @@ router.get('/compute', (req, res) => {
   return res.json({ ok: true, ...payload });
 });
 
-// NEW: Return the saved weekly table verbatim if present (no compute/write)
+// Return the saved weekly table verbatim if present (no compute/write)
 router.get('/week', (req, res) => {
   res.set('Cache-Control', 'no-store, max-age=0');
   const week = clampInt(req.query.week, 1, null);
@@ -312,9 +320,9 @@ router.get('/week', (req, res) => {
   if (!Array.isArray(weekly)) {
     // If not saved yet, compute on the fly (no write)
     const predsRaw   = readJson(path.join(PRED_DIR(req), `week-${week}.json`), null)
-                     ?? readJson(path.join(LEGACY_PRED_DIR(), `week-${week}.json`), null);
+                     ?? readJson(path.join(LEGACY_PRED_DIR(req), `week-${week}.json`), null);
     const resultsRaw = readJson(path.join(RES_DIR(req),  `week-${week}.json`), null)
-                     ?? readJson(path.join(LEGACY_RES_DIR(),  `week-${week}.json`), null);
+                     ?? readJson(path.join(LEGACY_RES_DIR(req),  `week-${week}.json`), null);
     const predMap    = normalisePredictions(predsRaw);
     const results    = normaliseResults(resultsRaw);
     const playersArr = readJson(PLAYERS(req), []);
@@ -352,9 +360,9 @@ router.get('/summary', (req, res) => {
       weekly = readJson(path.join(SCO_WEEKS(req), `week-${week}.json`), null);
       if (!Array.isArray(weekly)) {
         const predsRaw   = readJson(path.join(PRED_DIR(req), `week-${week}.json`), null)
-                         ?? readJson(path.join(LEGACY_PRED_DIR(), `week-${week}.json`), null);
+                         ?? readJson(path.join(LEGACY_PRED_DIR(req), `week-${week}.json`), null);
         const resultsRaw = readJson(path.join(RES_DIR(req),  `week-${week}.json`), null)
-                         ?? readJson(path.join(LEGACY_RES_DIR(),  `week-${week}.json`), null);
+                         ?? readJson(path.join(LEGACY_RES_DIR(req),  `week-${week}.json`), null);
         const predMap    = normalisePredictions(predsRaw);
         const results    = normaliseResults(resultsRaw);
         const playersArr = readJson(PLAYERS(req), []);
@@ -439,9 +447,9 @@ router.get('/player-week', (req, res) => {
    ?? readJson(path.join(fxBase, 'weeks', `week-${week}.json`), null);
 
   const predsRaw   = readJson(path.join(PRED_DIR(req), `week-${week}.json`), null)
-                   ?? readJson(path.join(LEGACY_PRED_DIR(), `week-${week}.json`), null);
+                   ?? readJson(path.join(LEGACY_PRED_DIR(req), `week-${week}.json`), null);
   const resultsRaw = readJson(path.join(RES_DIR(req),  `week-${week}.json`), null)
-                   ?? readJson(path.join(LEGACY_RES_DIR(),  `week-${week}.json`), null);
+                   ?? readJson(path.join(LEGACY_RES_DIR(req),  `week-${week}.json`), null);
 
   const predMap  = normalisePredictions(predsRaw);
   const results  = normaliseResults(resultsRaw);

@@ -7,6 +7,60 @@
   
   <link rel="stylesheet" href="/styles.css">
 </head>
+<!-- Competition picker + sticky tenant/comp params -->
+<div style="margin:16px 0;padding:12px;border:1px solid #ddd;border-radius:12px">
+  <label style="font-weight:600">Competition (optional)</label>
+  <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+    <input id="compSlug" placeholder="e.g. EPL-2025 or A-LEAGUE-2025" style="flex:1;padding:8px;border:1px solid #ccc;border-radius:8px">
+    <button id="useComp" style="padding:8px 12px;border-radius:8px;border:1px solid #333;background:#333;color:#fff">Use Comp</button>
+    <small id="compHint" style="opacity:.75">Leave blank to use server default (EPL-2025).</small>
+  </div>
+</div>
+
+<script>
+(() => {
+  const u = new URL(location.href);
+  const t = u.searchParams.get('t') || '';      // tenant from URL
+  const savedC = localStorage.getItem('comp');  // last chosen competition
+
+  // If user has a saved comp and URL lacks ?c, add it once
+  if (!u.searchParams.has('c') && savedC) {
+    u.searchParams.set('c', savedC);
+    location.replace(u.pathname + '?' + u.searchParams.toString());
+    return;
+  }
+
+  // Make all internal links carry ?t and ?c
+  function stickLinks() {
+    const urlNow = new URL(location.href);
+    const c = urlNow.searchParams.get('c') || '';
+    document.querySelectorAll('a[href^="/"]').forEach(a => {
+      const url = new URL(a.getAttribute('href'), location.origin);
+      if (t && !url.searchParams.get('t')) url.searchParams.set('t', t);
+      if (c && !url.searchParams.get('c')) url.searchParams.set('c', c);
+      a.setAttribute('href', url.pathname + '?' + url.searchParams.toString());
+    });
+  }
+  stickLinks();
+
+  // Wire up the Competition field
+  const input = document.getElementById('compSlug');
+  const btn   = document.getElementById('useComp');
+  if (input && btn) {
+    const currentC = (new URL(location.href)).searchParams.get('c') || savedC || '';
+    input.value = currentC;
+    btn.addEventListener('click', () => {
+      const val = (input.value || '').trim();
+      if (val) localStorage.setItem('comp', val);
+      else localStorage.removeItem('comp'); // let server default to EPL-2025
+      const nu = new URL(location.href);
+      if (val) nu.searchParams.set('c', val); else nu.searchParams.delete('c');
+      location.href = nu.pathname + '?' + nu.searchParams.toString();
+    });
+  }
+})();
+</script>
+
 <body>
   <div class="title-bar">MatchM8 Soccer Predictions</div>
   <div class="league-bar">English Premier League</div>

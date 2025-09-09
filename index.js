@@ -1,4 +1,4 @@
-// index.js — MatchM8 server (prod-ready with ephemeral fallback + seeding + per-request tenant meta)
+// index.js — MatchM8 server (prod-ready with ephemeral fallback + seeding + per-request tenant+competition meta)
 const fs   = require('fs');
 const path = require('path');
 
@@ -64,26 +64,31 @@ const fetchFn = (...args) =>
 // ⬇️ legacy global license bypass flag (dev/demo)
 const SKIP_LICENSE = String(process.env.DEMO_SKIP_LICENSE || '').toLowerCase() === 'true';
 
-/* -------------------- Per-request TENANT context --------------------
- * TENANT selection rules (in priority order):
+/* -------------------- Per-request TENANT + COMPETITION context --------------------
+ * TENANT selection rules (priority):
  * 1) TENANT_MAP JSON env maps request hostname -> tenant slug
  * 2) ALLOW_TENANT_OVERRIDE=true lets you pass ?t=TENANT or header x-tenant: TENANT
  * 3) TENANT env fallback
  * 4) 'default'
- * Data for each request is under:  <DATA_DIR>/tenants/<TENANT>/
- * We set req.ctx = { tenant, dataDir } for downstream routes.
+ *
+ * COMPETITION selection rules (priority):
+ * 1) URL ?c=<COMPETITION> (e.g., EPL-2025, BUNDES-2025, A-LEAGUE-2025)
+ * 2) tenant-level config.json { "defaultCompetition": "EPL-2025" }
+ * 3) DEFAULT_COMP env
+ * 4) "EPL-2025"
+ *
+ * Data root for request = <DATA_DIR>/tenants/<TENANT>/competitions/<COMP>/  (if COMP chosen)
+ * Otherwise legacy root = <DATA_DIR>/tenants/<TENANT>/
+ *
+ * We set req.ctx = { tenant, comp, tenantDir, compDir, dataDir } for downstream routes.
  */
-function parseTenantMap() {
-  try { return JSON.parse(process.env.TENANT_MAP || '{}'); }
-  catch { return {}; }
-}
-function sanitizeSlug(s) { return String(s || '').replace(/[^A-Za-z0-9._-]/g, '_'); }
+function parseTenantMap() { try { return JSON.parse(process.env.TENANT_MAP || '{}'); } catch { return {}; } }
+function sanitizeSlug(s) { return String(s || '').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 64); }
 
 function resolveTenant(req) {
   const map = parseTenantMap();
   const host = (req.headers['x-forwarded-host'] || req.hostname || '')
     .split(':')[0].toLowerCase();
-
   let t = map[host];
   if (!t && process.env.ALLOW_TENANT_OVERRIDE === 'true') {
     t = req.query.t || req.get('x-tenant');
@@ -91,31 +96,56 @@ function resolveTenant(req) {
   return sanitizeSlug(t || process.env.TENANT || 'default');
 }
 
+function readJsonIfExists(p, fallback = null) {
+  try { if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf8')); }
+  catch {}
+  return fallback;
+}
+
 function tenantMiddleware(req, _res, next) {
   try {
     const tenant = resolveTenant(req);
-    const dataDir = path.join(DATA_DIR, 'tenants', tenant);
-    fs.mkdirSync(dataDir, { recursive: true });
-    req.ctx = { tenant, dataDir };
+    const tenantDir = path.join(DATA_DIR, 'tenants', tenant);
+    fs.mkdirSync(tenantDir, { recursive: true });
+
+    // determine competition (optional)
+    const tenantCfg = readJsonIfExists(path.join(tenantDir, 'config.json'), {});
+    let comp = sanitizeSlug(
+      req.query.c ||
+      tenantCfg?.defaultCompetition ||
+      process.env.DEFAULT_COMP ||
+      'EPL-2025'
+    );
+    // allow blank comp by setting DEFAULT_COMP="" if you want legacy paths
+    if (comp === undefined || comp === null) comp = '';
+    if (comp === 'default') comp = '';
+
+    // derive compDir and dataDir
+    const compDir = comp ? path.join(tenantDir, 'competitions', comp) : tenantDir;
+    fs.mkdirSync(compDir, { recursive: true });
+
+    // Ensure common subdirs exist under the chosen dataDir
+    const dataDir = compDir;
+    const subdirs = ['fixtures', 'results', 'predictions', path.join('scores', 'weeks'), 'scores'];
+    for (const rel of subdirs) {
+      try { fs.mkdirSync(path.join(dataDir, rel), { recursive: true }); } catch {}
+    }
+
+    req.ctx = { tenant, comp, tenantDir, compDir, dataDir };
   } catch {
-    req.ctx = { tenant: process.env.TENANT || 'default', dataDir: BASE_DATA_DIR };
+    req.ctx = { tenant: process.env.TENANT || 'default', comp: '', tenantDir: BASE_DATA_DIR, compDir: BASE_DATA_DIR, dataDir: BASE_DATA_DIR };
   }
   next();
 }
 
-// Ensure data dir exists + common subdirs; optionally seed demo content once (global path).
+// Ensure repo-level data exists + optional seed (global)
 function ensureDataDirsAndSeed() {
-  const subdirs = [
-    '.', 'fixtures', 'results', 'predictions',
-    path.join('scores', 'weeks'), 'scores'
-  ];
+  const subdirs = ['.', 'fixtures', 'results', 'predictions', path.join('scores', 'weeks'), 'scores'];
   for (const rel of subdirs) {
     try { fs.mkdirSync(path.join(DATA_DIR, rel), { recursive: true }); } catch {}
   }
-
   const seedDir = path.join(__dirname, 'data', '_seed');
   const seededMarker = path.join(DATA_DIR, '.seeded');
-
   try {
     const already = fs.existsSync(seededMarker);
     const hasSeed = fs.existsSync(seedDir);
@@ -137,7 +167,7 @@ const PORT = process.env.PORT || 3000;   // ✅ use platform port if provided
 
 const joinRepo = (...p) => path.join(__dirname, ...p);
 const joinData = (...p) => path.join(DATA_DIR, ...p);
-const CONFIG_PATH = joinData('config.json');
+const CONFIG_PATH = joinData('config.json'); // global legacy (not per-tenant)
 
 // --- config defaults used if data/config.json is missing ---
 const DEFAULT_CONFIG = {
@@ -146,10 +176,10 @@ const DEFAULT_CONFIG = {
   current_week: 1,
   lock_minutes_before_kickoff: 10,
   deadline_mode: 'first_kickoff',
-  timezone: 'Australia/Melbourne',
+  timezone: 'Australia/Melbourne'
 };
 
-// helpers to read/write global config.json safely
+// helpers to read/write global config.json safely (legacy)
 function readConfig() {
   try {
     const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
@@ -164,8 +194,9 @@ function writeConfig(cfg) {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
 }
 
-/* ---- TENANT config helpers ---- */
+/* ---- TENANT + COMP config helpers ---- */
 function cfgPathFor(req) {
+  // competition-scoped config (season, tz, locks, etc.)
   const base = req?.ctx?.dataDir || DATA_DIR;
   return path.join(base, 'config.json');
 }
@@ -182,6 +213,27 @@ function writeConfigFor(req, cfg) {
   const base = req?.ctx?.dataDir || DATA_DIR;
   try { fs.mkdirSync(base, { recursive: true }); } catch {}
   fs.writeFileSync(cfgPathFor(req), JSON.stringify(cfg, null, 2));
+}
+
+// TENANT-level config helpers (license, defaults)
+function tenantCfgPathFor(req) {
+  const base = req?.ctx?.tenantDir || path.join(DATA_DIR, 'tenants', resolveTenant(req));
+  return path.join(base, 'config.json');
+}
+function readTenantConfigFor(req) {
+  try {
+    const raw = fs.readFileSync(tenantCfgPathFor(req), 'utf8');
+    return JSON.parse(raw);
+  } catch { return {}; }
+}
+function writeTenantConfigFor(req, patch) {
+  const p = tenantCfgPathFor(req);
+  let prev = {};
+  try { prev = JSON.parse(fs.readFileSync(p, 'utf8')); } catch {}
+  const next = { ...prev, ...patch };
+  try { fs.mkdirSync(path.dirname(p), { recursive: true }); } catch {}
+  fs.writeFileSync(p, JSON.stringify(next, null, 2));
+  return next;
 }
 
 // timing-safe admin-token guard
@@ -236,7 +288,8 @@ function verifyTenantLicenseToken(token, secret) {
   return { ok:true, claims };
 }
 function getTenantLicenseClaims(req) {
-  const cfg = readConfigFor(req);
+  // IMPORTANT: license is stored at TENANT ROOT, not per-competition
+  const cfg = readTenantConfigFor(req);
   const token  = String(cfg.license_token || '');
   const secret = process.env.LICENSE_SECRET || '';
   const v = verifyTenantLicenseToken(token, secret);
@@ -254,7 +307,7 @@ function requireValidTenantLicense(req, res, next) {
   req.license = v.claims;
   next();
 }
-// Optional: enforce seat cap on player creation only
+// Optional: enforce seat cap on player creation only (per competition, since players live under comp dataDir)
 function enforceSeatLimitOnPlayerCreate(req, res, next) {
   if (req.method.toUpperCase() !== 'POST') return next();
   if (String(process.env.DEMO_SKIP_LICENSE || '').toLowerCase() === 'true') return next();
@@ -263,7 +316,7 @@ function enforceSeatLimitOnPlayerCreate(req, res, next) {
   const seats = Number(v.claims?.seats);
   if (!Number.isFinite(seats) || seats <= 0) return res.status(403).json({ ok:false, error:'Seat limit not set' });
 
-  const p = path.join(req.ctx.dataDir, 'players.json');
+  const p = path.join(req.ctx.dataDir, 'players.json'); // comp-scoped
   let players = [];
   try { players = JSON.parse(fs.readFileSync(p, 'utf8')); } catch {}
   if (players.length >= seats) {
@@ -293,7 +346,7 @@ app.use(cookieParser());
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false }));
 
-// 🔑 Per-request TENANT context
+// 🔑 Per-request TENANT + COMP context
 app.use(tenantMiddleware);
 
 // Health
@@ -305,12 +358,14 @@ app.get('/api/__meta', (req, res) => {
   res.json({
     ok: true,
     tenant: req.ctx?.tenant || (process.env.TENANT || 'default'),
+    competition: req.ctx?.comp || '',
+    tenantDir: req.ctx?.tenantDir || null,
     dataDir: req.ctx?.dataDir || DATA_DIR,
     appTitle: process.env.APP_TITLE || 'MatchM8'
   });
 });
 
-// ✅ Public READ results (tenant-aware) — normalize legacy shapes
+// ✅ Public READ results (tenant+comp aware) — normalize legacy shapes
 app.get('/api/results', (req, res) => {
   try {
     const wk = Math.max(1, parseInt(req.query.week, 10) || 1);
@@ -345,7 +400,7 @@ app.get('/api/results', (req, res) => {
   }
 });
 
-// Tenant-aware aliases for legacy static links
+// Tenant+comp-aware aliases for legacy static links
 app.get(/^\/data\/(fixtures|results|scores)\/(.+)$/, (req, res, next) => {
   try {
     const bucket = req.params[0];
@@ -373,7 +428,7 @@ app.use((req, res, next) => {
   next();
 });
 
-/* -------------------- /api/config -------------------- */
+/* -------------------- /api/config (competition-scoped) -------------------- */
 app.get('/api/config', (req, res) => res.json(readConfigFor(req)));
 app.post('/api/config', requireAdminToken, (req, res) => {
   const prev = readConfigFor(req);
@@ -390,20 +445,25 @@ app.post('/api/config', requireAdminToken, (req, res) => {
   res.json({ ok: true, config: next });
 });
 
-/* -------------------- Tenant license endpoints -------------------- */
+/* -------------------- Tenant license endpoints (TENANT-LEVEL) -------------------- */
 // Public status for current tenant
 app.get('/api/tenant/license/status', (req, res) => {
   const v = getTenantLicenseClaims(req);
   res.json({ ok: v.ok, reason: v.reason || 'ok', claims: v.claims || null });
 });
-// Admin: apply/update tenant license token
+// Admin: apply/update tenant license token (writes to TENANT ROOT config.json)
 app.post('/api/tenant/license/apply', requireAdminToken, express.json(), (req, res) => {
   const token = String(req.body?.token || '').trim();
   if (!token) return res.status(400).json({ ok:false, error:'missing token' });
-  const cur = readConfigFor(req);
-  writeConfigFor(req, { ...cur, license_token: token });
+  writeTenantConfigFor(req, { license_token: token });
   const v = getTenantLicenseClaims(req);
   res.json({ ok: v.ok, reason: v.reason || 'ok', claims: v.claims || null });
+});
+// (Optional) set defaultCompetition at tenant level
+app.post('/api/tenant/default-competition', requireAdminToken, express.json(), (req, res) => {
+  const val = String(req.body?.defaultCompetition || '').trim();
+  writeTenantConfigFor(req, { defaultCompetition: val });
+  res.json({ ok: true, defaultCompetition: val });
 });
 
 /* -------------------- Safe require + mount -------------------- */
@@ -419,7 +479,6 @@ function safeRequire(label, p) {
     return { ok: false, mod: null, reason: e.message };
   }
 }
-
 function mount(label, route, mod) {
   app.use(route, mod);
   mounted.push({ label, route });
@@ -431,7 +490,7 @@ if (fixtures.ok) {
   mount('./routes/fixtures.js', '/api/fixtures', fixtures.mod);
   mount('./routes/fixtures.js', '/fixtures', fixtures.mod);
 } else {
-  // Fallback public fixtures: tenant-aware (uses tenant config for season)
+  // Fallback public fixtures: tenant+comp aware (uses competition config for season)
   app.get('/api/fixtures', (req, res) => {
     const cfg = readConfigFor(req);
     const week = Math.max(1, parseInt(req.query.week, 10) || 1);
@@ -551,6 +610,8 @@ app.get('/api/__health', (req, res) =>
     mode: APP_MODE,
     dataDir_global: DATA_DIR,
     tenant: req.ctx?.tenant || null,
+    competition: req.ctx?.comp || '',
+    tenantDir: req.ctx?.tenantDir || null,
     dataDir_request: req.ctx?.dataDir || null
   })
 );

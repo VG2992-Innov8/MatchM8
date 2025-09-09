@@ -41,9 +41,16 @@ router.use((req, res, next) => {
   return res.status(403).json({ ok: false, error: 'forbidden' });
 });
 
-// ---------- tenant helpers ----------
+// ---------- tenant + competition helpers ----------
+function tenantSlug(req) {
+  return String(req?.ctx?.tenant || 'default');
+}
+function tenantDir(req) {
+  return req?.ctx?.tenantDir || path.join(DATA_DIR, 'tenants', tenantSlug(req));
+}
 function dataDir(req) {
-  return (req && req.ctx && req.ctx.dataDir) ? req.ctx.dataDir : DATA_DIR;
+  // competition-scoped dir (or tenant root in legacy mode)
+  return (req && req.ctx && req.ctx.dataDir) ? req.ctx.dataDir : tenantDir(req);
 }
 function pJoin(req, ...p) {
   return path.join(dataDir(req), ...p);
@@ -60,6 +67,60 @@ function readJsonSync(p, fb = null) {
 async function writeJson(req, p, obj) {
   await ensureDirFor(p);
   await writeJsonAtomic(p, obj);
+}
+
+// ---------- license / seat-cap helpers (tenant-level license) ----------
+function b64urlEncode(bufOrStr) {
+  const b = Buffer.isBuffer(bufOrStr) ? bufOrStr : Buffer.from(String(bufOrStr));
+  return b.toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+function b64urlDecode(str) {
+  let s = String(str || '').replace(/-/g,'+').replace(/_/g,'/');
+  while (s.length % 4) s += '=';
+  return Buffer.from(s, 'base64').toString('utf8');
+}
+function verifyTenantLicenseToken(token, secret) {
+  if (!token || typeof token !== 'string' || !token.includes('.')) return { ok:false, reason:'malformed' };
+  if (!secret) return { ok:false, reason:'missing LICENSE_SECRET' };
+  const [body, sig] = token.split('.');
+  const expected = b64urlEncode(crypto.createHmac('sha256', secret).update(body).digest());
+  if (sig !== expected) return { ok:false, reason:'bad signature' };
+  let claims;
+  try { claims = JSON.parse(b64urlDecode(body)); }
+  catch { return { ok:false, reason:'bad payload' }; }
+  return { ok:true, claims };
+}
+function readTenantConfig(req) {
+  try { return JSON.parse(fs.readFileSync(path.join(tenantDir(req), 'config.json'), 'utf8')); }
+  catch { return {}; }
+}
+function getTenantLicenseClaims(req) {
+  const cfg = readTenantConfig(req);
+  const token  = String(cfg.license_token || '');
+  const secret = process.env.LICENSE_SECRET || '';
+  const v = verifyTenantLicenseToken(token, secret);
+  if (!v.ok) return v;
+  const c = v.claims || {};
+  if (c.tenant && c.tenant !== tenantSlug(req)) return { ok:false, reason:'tenant mismatch', claims:c };
+  if (c.exp && Date.now() > Date.parse(c.exp)) return { ok:false, reason:'expired', claims:c };
+  return { ok:true, claims:c };
+}
+async function readPlayers(req){ return await readJson(pJoin(req, 'players.json'), []) || []; }
+async function writePlayers(req, arr){ await writeJson(req, pJoin(req, 'players.json'), arr); }
+
+async function enforceSeatLimitOrFail(req, toAddCount = 1) {
+  // DEMO bypass keeps behaviour consistent with the rest of the app
+  if (String(process.env.DEMO_SKIP_LICENSE || '').toLowerCase() === 'true') return { ok:true };
+  const v = getTenantLicenseClaims(req);
+  if (!v.ok) return { ok:false, status:403, error: 'No valid tenant license (' + (v.reason || 'unknown') + ')' };
+  const seats = Number(v.claims?.seats);
+  if (!Number.isFinite(seats) || seats <= 0) return { ok:false, status:403, error:'Seat limit not set' };
+  const players = await readPlayers(req);
+  if (players.length + toAddCount > seats) {
+    const remaining = Math.max(0, seats - players.length);
+    return { ok:false, status:403, error:`Seat limit reached (${seats})`, seats, current: players.length, remaining };
+  }
+  return { ok:true, seats };
 }
 
 // ---------- CSV helpers ----------
@@ -123,14 +184,15 @@ function parseCsvTolerant(text) {
   return { header, rows };
 }
 
-// ---------- Players storage (tenant-aware) ----------
-function playersPath(req){ return pJoin(req, 'players.json'); }
-async function readPlayers(req){ return await readJson(playersPath(req), []) || []; }
-async function writePlayers(req, arr){ await writeJson(req, playersPath(req), arr); }
-
 // ---------- Admin health ----------
 router.get('/health', (req, res) => {
-  res.json({ ok: true, tenant: (req.ctx && req.ctx.tenant) || null, dataDir: dataDir(req) });
+  res.json({
+    ok: true,
+    tenant: (req.ctx && req.ctx.tenant) || tenantSlug(req),
+    competition: (req.ctx && req.ctx.comp) || '',
+    dataDir: dataDir(req),
+    tenantDir: tenantDir(req)
+  });
 });
 
 /* ========================= Players CRUD ========================= */
@@ -160,6 +222,10 @@ router.post('/players', async (req, res) => {
     if (!name || typeof name !== 'string' || !name.trim())
       return res.status(400).json({ error: 'name_required' });
 
+    // Enforce seat cap (per-competition)
+    const cap = await enforceSeatLimitOrFail(req, 1);
+    if (!cap.ok) return res.status(cap.status || 403).json({ ok:false, error: cap.error, ...cap });
+
     const players = await readPlayers(req);
     const id = (crypto.randomUUID && crypto.randomUUID()) ||
                `p-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`;
@@ -171,7 +237,9 @@ router.post('/players', async (req, res) => {
     players.push(rec);
     await writePlayers(req, players);
     res.json({ ok: true, player: { id: rec.id, name: rec.name, email: rec.email || '', has_pin: !!rec.pin_hash, pin_updated_at: rec.pin_updated_at || null }});
-  } catch { res.status(500).json({ error: 'server_error' }); }
+  } catch (e) {
+    res.status(500).json({ error: 'server_error' });
+  }
 });
 
 router.put('/players/:id', async (req, res) => {
@@ -418,18 +486,46 @@ router.post('/players/upload', async (req, res) => {
     if (!csv) return res.status(400).json({ ok: false, error: 'csv required' });
     const rows = parseCsv(csv);
 
+    // enforce seat cap across bulk import (per-competition)
+    const existing = await readPlayers(req);
+    let remaining = Infinity;
+    if (String(process.env.DEMO_SKIP_LICENSE || '').toLowerCase() !== 'true') {
+      const v = getTenantLicenseClaims(req);
+      if (!v.ok) return res.status(403).json({ ok:false, error:'No valid tenant license (' + (v.reason || 'unknown') + ')' });
+      const seats = Number(v.claims?.seats);
+      if (Number.isFinite(seats) && seats > 0) remaining = Math.max(0, seats - existing.length);
+      if (remaining <= 0) return res.status(403).json({ ok:false, error:`Seat limit reached (${seats})`, seats, current: existing.length, remaining: 0 });
+    }
+
     const out = [];
+    let hashed = 0;
     for (const r of rows) {
-      const rec = { id: r.id || (crypto.randomUUID && crypto.randomUUID()) || `p-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`, name: r.name || '', email: r.email || '' };
+      if (out.length >= remaining) break; // stop when we hit seat cap
+      const rec = {
+        id: r.id || (crypto.randomUUID && crypto.randomUUID()) || `p-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`,
+        name: r.name || '',
+        email: r.email || ''
+      };
       if (r.pin && String(r.pin).length >= 4) {
         rec.pin_hash = await bcrypt.hash(String(r.pin), 10);
         rec.pin_updated_at = new Date().toISOString();
+        hashed++;
       }
       out.push(rec);
     }
 
-    await writePlayers(req, out);
-    return res.json({ ok: true, imported: out.length, hashed: out.filter(p => p.pin_hash).length });
+    const finalArr = existing.concat(out);
+    await writePlayers(req, finalArr);
+
+    const truncated = rows.length > out.length;
+    return res.json({
+      ok: true,
+      imported: out.length,
+      hashed,
+      totalPlayers: finalArr.length,
+      truncated, // true if seat cap prevented importing all rows
+      remainingAfter: Math.max(0, (remaining === Infinity ? finalArr.length : remaining - out.length))
+    });
   } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
 });
 
