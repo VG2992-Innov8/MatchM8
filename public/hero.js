@@ -1,14 +1,33 @@
-// /public/hero.js Ã¢â‚¬" 3 header strips, centered text, stepped sizes, Admin only when verified
+// /public/hero.js — 3 header strips, centered text, stepped sizes,
+// **now preserves ?t=<tenant>&c=<comp> on all nav links (incl. Admin)**
+
 (() => {
   const host = document.getElementById('hero');
   if (!host) return;
 
-  // Labels
-  const pageName   = (host.dataset.page || document.title || 'Home').trim();
+  // ---- scope helpers (works with or without tenant.js) ----
+  const qs = new URLSearchParams(location.search);
+  const T = (qs.get('t') || localStorage.getItem('tenant') || '').trim();
+  const C = (qs.get('c') || localStorage.getItem('comp')   || '').trim();
+
+  const scopeHref = (href) => {
+    try {
+      // Prefer tenant.js helper if present
+      if (typeof window.withScope === 'function') return window.withScope(href);
+      const u = new URL(href, location.origin);
+      if (u.origin !== location.origin) return href;
+      if (T && !u.searchParams.has('t')) u.searchParams.set('t', T);
+      if (C && !u.searchParams.has('c')) u.searchParams.set('c', C);
+      return u.pathname + u.search;
+    } catch { return href; }
+  };
+
+  // ---- labels ----
+  const pageName   = (host.dataset.page   || document.title || 'Home').trim();
   const leagueName = (host.dataset.league || window.MATCHM8_LEAGUE || 'English Premier League').trim();
   const brandName  = (host.dataset.brand  || window.MATCHM8_BRAND  || 'MatchM8 Soccer').trim();
 
-  // Isolated styles (namespaced)
+  // ---- isolated styles ----
   if (!document.getElementById('m8-header-style')) {
     const css = `
       .m8-header{margin:0 0 12px 0;}
@@ -17,7 +36,6 @@
         background:var(--blue-900,#0d3b66); color:#fff; font-weight:800;
         display:flex; align-items:center; justify-content:center; text-align:center;
       }
-      /* Stepped sizes: all bigger than buttons */
       .m8-strip.brand  { font-size: clamp(26px, 3.2vw, 34px); font-weight:900; }
       .m8-strip.league { font-size: clamp(20px, 2.6vw, 28px); font-weight:800; background:var(--blue-800,#114a82); }
       .m8-strip.page   { font-size: clamp(18px, 2.2vw, 24px); font-weight:700; background:var(--blue-700,#19599d); }
@@ -38,11 +56,11 @@
     document.head.appendChild(s);
   }
 
-  // Build base nav (without Admin yet)
+  // ---- base nav (scoped) ----
   const links = [
-    { href:'/Part_A_PIN.html',         label:'Home' },
-    { href:'/Part_B_Predictions.html', label:'Predictions' },
-    { href:'/Part_E_Season.html',      label:'Leaderboard' },
+    { href: scopeHref('/Part_A_PIN.html'),         label:'Home' },
+    { href: scopeHref('/Part_B_Predictions.html'), label:'Predictions' },
+    { href: scopeHref('/Part_E_Season.html'),      label:'Leaderboard' },
   ];
   const isActive = (href) => {
     try { return new URL(href, location.origin).pathname === location.pathname; }
@@ -50,7 +68,7 @@
   };
   const linkHTML = (l) => `<a href="${l.href}" ${isActive(l.href) ? 'aria-current="page"' : ''}>${l.label}</a>`;
 
-  // Render header + nav shell
+  // ---- render header + nav shell ----
   host.innerHTML = `
     <div class="m8-header">
       <div class="m8-strip brand">${brandName}</div>
@@ -60,6 +78,13 @@
     </div>
   `;
 
+  // Safety net: rewrite any nav links to ensure scope (covers dynamic markup)
+  window.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('nav.m8-nav a[href^="/"]').forEach(a => {
+      a.setAttribute('href', scopeHref(a.getAttribute('href')));
+    });
+  });
+
   // ---------- Personalize Predictions label ----------
   function isPredictionsPage() {
     if (/^Predictions$/i.test(pageName)) return true;
@@ -67,7 +92,6 @@
     catch { return false; }
   }
 
-  // Simple, safe cookie reader (no regex)
   function getCookie(name) {
     const all = document.cookie ? document.cookie.split('; ') : [];
     for (const pair of all) {
@@ -77,83 +101,61 @@
     }
     return null;
   }
-
-  function possessive(name) {
-    if (!name) return null;
-    return /s$/i.test(name) ? `${name}'` : `${name}'s`;
-  }
+  const possessive = (name) => (!name ? null : (/s$/i.test(name) ? `${name}'` : `${name}'s`));
 
   async function getPlayerName() {
-    // 1) localStorage (common in PIN flows)
-    const keys = ['player_name','PLAYER_NAME','MM8_PLAYER_NAME'];
-    for (const k of keys) {
-      const v = localStorage.getItem(k);
-      if (v) return v;
+    for (const k of ['player_name','PLAYER_NAME','MM8_PLAYER_NAME']) {
+      const v = localStorage.getItem(k); if (v) return v;
     }
-    // 2) cookies (if you set them on login)
     const ck = getCookie('player_name') || getCookie('mm8_player_name');
     if (ck) return ck;
-
-    // 3) optional server probe (safe if absent)
     try {
       const r = await fetch('/api/auth/whoami', { credentials: 'include' });
-      if (r.ok) {
-        const j = await r.json();
-        if (j && j.player && j.player.name) return j.player.name;
-      }
+      if (r.ok) { const j = await r.json(); if (j?.player?.name) return j.player.name; }
     } catch {}
     return null;
   }
 
   (async () => {
     if (!isPredictionsPage()) return;
-    const el = document.getElementById('m8-page-strip');
-    if (!el) return;
-    const name = await getPlayerName();
-    if (name) el.textContent = `${possessive(name)} Predictions`;
+    const el = document.getElementById('m8-page-strip'); if (!el) return;
+    const name = await getPlayerName(); if (name) el.textContent = `${possessive(name)} Predictions`;
   })();
   // ---------- /personalize ----------
 
-  // Admin link appears ONLY after token is verified
+  // ---- Admin link appears ONLY after token is verified (scoped href) ----
   const adminSlot = document.getElementById('m8-admin-slot');
   const tok = localStorage.getItem('admin_token') || '';
   if (tok) {
     fetch('/api/admin/health', { headers: { 'x-admin-token': tok } })
       .then(r => r.ok ? r.json() : Promise.reject())
       .then(() => {
-        adminSlot.innerHTML = `<a href="/ui/admin.html" ${isActive('/ui/admin.html') ? 'aria-current="page"' : ''}>Admin</a>`;
+        const href = scopeHref('/ui/admin.html');
+        adminSlot.innerHTML = `<a href="${href}" ${isActive(href) ? 'aria-current="page"' : ''}>Admin</a>`;
       })
       .catch(() => { /* invalid token => keep hidden */ });
   }
 })();
+
 // Default the Admin week input to current_week (only on Admin-like pages)
 (() => {
   const page = document.getElementById('hero')?.dataset?.page || '';
-  // Adjust these labels to match your Admin pages' <div id="hero" data-page="...">
   const ADMIN_PAGES = ['Fixtures', 'Results', 'Admin', 'Locks', 'Admin Fixtures', 'Admin Results'];
-
   if (!ADMIN_PAGES.includes(page)) return;
 
   window.addEventListener('DOMContentLoaded', async () => {
-    // don’t override an explicit ?week=... in the URL
     const qs = new URLSearchParams(location.search);
-    if (qs.has('week')) return;
+    if (qs.has('week')) return; // don’t override explicit week
 
     const inp = document.getElementById('week');
     if (!inp) return;
 
     try {
-      const cfg = await fetch('/api/config',{cache:'no-store'}).then(r=>r.json());
+      const cfg = await fetch('/api/config', { cache:'no-store' }).then(r=>r.json());
       inp.value = Number(cfg.current_week || 1);
       inp.dispatchEvent(new Event('change'));
     } catch {}
-  
-    const shouldShowPreview = (page !== 'Season'); // hide on leaderboard
 
-if (shouldShowPreview) {
-  // ... create/append the Preview button here ...
-}
+    // (Preview button placeholder left as-is)
   });
-  
 })();
-
