@@ -85,12 +85,22 @@
 
   <script>
     /* ---------------- tenant helper (used everywhere) ---------------- */
-    function withTenant(url) {
+    function withScope(url) {
       const u = new URL(url, location.origin);
       const t = new URLSearchParams(location.search).get('t') || localStorage.getItem('tenant') || '';
       if (t) u.searchParams.set('t', t);
       return u.toString();
     }
+
+    // >>> Competition helper (NEW) <<<
+    const COMP = (new URLSearchParams(location.search).get('c') || localStorage.getItem('comp') || '').trim();
+    if (COMP) { try { localStorage.setItem('comp', COMP); } catch {} }
+    function withScope(url){
+      const u = new URL(withScope(url), location.origin);
+      if (COMP) u.searchParams.set('c', COMP);
+      return u.toString();
+    }
+
     // persist tenant for this tab/session
     const TENANT = new URLSearchParams(location.search).get('t') || localStorage.getItem('tenant') || '';
     if (TENANT) localStorage.setItem('tenant', TENANT);
@@ -116,7 +126,7 @@
     function setScoringLink(){
       const wk = clamp(Number(weekInput.value || 1));
       document.getElementById('toScoring').href =
-        withTenant(`/Part_D_Scoring.html?week=${wk}`);
+        withScope(`/Part_D_Scoring.html?week=${wk}`);
     }
     function setWeekLabel(){
       const wk = clamp(Number(weekInput.value || 1));
@@ -136,7 +146,7 @@
 
     async function loadConfig() {
       try {
-        const cfg = await fetch(withTenant('/api/config'), {cache:'no-store'}).then(r => r.json());
+        const cfg = await fetch(withScope('/api/config'), {cache:'no-store'}).then(r => r.json());
         TOTAL_WEEKS    = Number(cfg.total_weeks || 38);
         LOCK_MINS      = Number(cfg.lock_minutes_before_kickoff ?? cfg.lock_mins ?? 10);
         DEADLINE_MODE  = (String(cfg.deadline_mode||'first_kickoff').toLowerCase() === 'per_match') ? 'per_match' : 'first_kickoff';
@@ -155,7 +165,7 @@
 
     async function fetchFixtures(week){
       try{
-        const res = await fetch(withTenant(`/api/fixtures?week=${encodeURIComponent(week)}`), {cache:'no-store'});
+        const res = await fetch(withScope(`/api/fixtures?week=${encodeURIComponent(week)}`), {cache:'no-store'});
         if(!res.ok) return [];
         const data = await res.json();
         const list = Array.isArray(data) ? data : (Array.isArray(data.fixtures) ? data.fixtures : []);
@@ -301,7 +311,7 @@
       const player_id = (localStorage.getItem('player_id') || '').trim();
 
       try{
-        await fetch(withTenant('/api/predictions'), {
+        await fetch(withScope('/api/predictions'), {
           method:'POST',
           headers: {
             'Content-Type':'application/json',
@@ -326,7 +336,7 @@
     }
     async function fetchLockInfo(week){
       try{
-        const r = await fetch(withTenant(`/api/locks?week=${encodeURIComponent(week)}`), { cache:'no-store' });
+        const r = await fetch(withScope(`/api/locks?week=${encodeURIComponent(week)}`), { cache:'no-store' });
         if (!r.ok) return null;
         return await r.json();
       }catch{ return null; }
@@ -336,7 +346,7 @@
       const q = new URLSearchParams({ week: String(week) });
       if (who.id) q.set('player_id', who.id); else q.set('name', who.name);
       try{
-        const r = await fetch(withTenant(`/api/scores/player-week?${q.toString()}`), { cache:'no-store' });
+        const r = await fetch(withScope(`/api/scores/player-week?${q.toString()}`), { cache:'no-store' });
         if (!r.ok) return null;
         const data = await r.json();
         return new Map((data.rows||[]).map(r => [String(r.matchId), r]));
@@ -344,7 +354,7 @@
     }
     async function fetchPlainResults(week){
       try{
-        const r = await fetch(withTenant(`/api/results?week=${encodeURIComponent(week)}`), { cache:'no-store' });
+        const r = await fetch(withScope(`/api/results?week=${encodeURIComponent(week)}`), { cache:'no-store' });
         if (!r.ok) return null;
         const data = await r.json();
         return data && data.results ? data.results : null;

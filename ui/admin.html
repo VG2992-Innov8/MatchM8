@@ -266,11 +266,21 @@
     // >>> Tenant helper (NEW) <<<
     const TENANT = qs.get('t') || localStorage.getItem('tenant') || '';
     if (TENANT) { try { localStorage.setItem('tenant', TENANT); } catch {} }
-    function withTenant(url) {
+    function withScope(url) {
       const u = new URL(url, location.origin);
       if (TENANT) u.searchParams.set('t', TENANT);
       return u.toString();
     }
+
+    // >>> Competition helper (NEW) <<<
+    const COMP = (new URLSearchParams(location.search).get('c') || localStorage.getItem('comp') || '').trim();
+    if (COMP) { try { localStorage.setItem('comp', COMP); } catch {} }
+    function withScope(url){
+      const u = new URL(withScope(url), location.origin);
+      if (COMP) u.searchParams.set('c', COMP);
+      return u.toString();
+    }
+
 
     const weekInput = $('#week');
     const weekTitle = $('#weekTitle');
@@ -340,7 +350,7 @@
       const tok = getToken();
       if (tok) headers['x-admin-token'] = tok;
       // >>> ensure tenant is always appended <<<
-      const finalUrl = withTenant(url);
+      const finalUrl = withScope(url);
       const res = await fetch(finalUrl, { ...opts, headers });
       if (!res.ok) {
         const text = await res.text().catch(() => '');
@@ -858,7 +868,7 @@
     async function computeScores() {
       const week = Number(document.querySelector('#week').value || 1);
       try {
-        const r = await fetch(withTenant('/api/scores/compute'), {
+        const r = await fetch(withScope('/api/scores/compute'), {
           method: 'POST',
           headers: {'Content-Type':'application/json'},
           body: JSON.stringify({ week })
@@ -873,7 +883,7 @@
     /* ---------------- Season Settings ---------------- */
     async function loadSeason(){
       try {
-        const cfg = await fetch(withTenant('/api/config')).then(r=>r.json());
+        const cfg = await fetch(withScope('/api/config')).then(r=>r.json());
         // read both snake_case + camelCase for safety
         const seasonVal = Number(cfg.season ?? 2025);
         const tw = Number(cfg.total_weeks ?? cfg.totalWeeks ?? 38);
@@ -1039,7 +1049,7 @@
 
       async function refreshLicense() {
         try {
-          const r = await fetch(withTenant('/api/license/status'));
+          const r = await fetch(withScope('/api/license/status'));
           const s = await r.json();
           if (s.ok) {
             const lic = s.license || {};
@@ -1088,7 +1098,7 @@
           ? { player_id: idOrName, new_pin: newPin }
           : { name: idOrName, new_pin: newPin };
 
-        const res = await fetch(withTenant('/api/admin/players/pin/reset'), {
+        const res = await fetch(withScope('/api/admin/players/pin/reset'), {
           method:'POST',
           headers: {
             'Content-Type':'application/json',
@@ -1108,7 +1118,7 @@
       });
 
       $('#loadPlayersBtn')?.addEventListener('click', async ()=>{
-        const res = await fetch(withTenant('/api/admin/players'), {
+        const res = await fetch(withScope('/api/admin/players'), {
           headers: { 'x-admin-token': localStorage.getItem('admin_token') || '' }
         });
         const list = res.ok ? await res.json() : [];

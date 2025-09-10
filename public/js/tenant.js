@@ -1,55 +1,74 @@
 // public/js/tenant.js
 (function () {
-  const KEY = 'tenant';
-  const fromUrl = new URLSearchParams(location.search).get('t');
-  let t = (fromUrl && fromUrl.trim()) || localStorage.getItem(KEY) || '';
-  if (t) localStorage.setItem(KEY, t);
+  const TENANT_KEY = 'tenant';
+  const COMP_KEY   = 'comp';
 
-  // expose helper if you need it elsewhere
+  const qs = new URLSearchParams(location.search);
+  const tFromUrl = (qs.get('t') || '').trim();
+  const cFromUrl = (qs.get('c') || '').trim();
+
+  let t = tFromUrl || localStorage.getItem(TENANT_KEY) || '';
+  let c = cFromUrl || localStorage.getItem(COMP_KEY) || '';
+
+  if (t) { try { localStorage.setItem(TENANT_KEY, t); } catch {} }
+  if (c) { try { localStorage.setItem(COMP_KEY, c); } catch {} }
+
+  // expose helpers
   window.getTenant = () => t;
+  window.getComp   = () => c;
 
-  // Rewrite internal links to carry ?t=...
+  function addScopeToUrl(url) {
+    try {
+      const u = new URL(url, location.origin);
+      if (u.origin !== location.origin) return url; // only same-origin
+      if (t && !u.searchParams.has('t')) u.searchParams.set('t', t);
+      if (c && !u.searchParams.has('c')) u.searchParams.set('c', c);
+      return u.toString();
+    } catch { return url; }
+  }
+  window.withScope     = addScopeToUrl;
+  window.navWithScope  = addScopeToUrl;
+  window.navWithTenant = addScopeToUrl; // legacy alias
+
+  // Rewrite internal <a> links
   document.addEventListener('DOMContentLoaded', () => {
-    if (!t) return;
-
-    // anchor tags
+    if (!t && !c) return;
     document.querySelectorAll('a[href]').forEach(a => {
       const href = a.getAttribute('href');
-      if (!href || href.startsWith('#')) return;
-      const url = new URL(href, location.origin);
-      if (url.origin !== location.origin) return;           // external link
-      if (!url.searchParams.get('t')) {
-        url.searchParams.set('t', t);
-        a.setAttribute('href', url.pathname + '?' + url.searchParams.toString() + (url.hash || ''));
-      }
-    });
-
-    // GET forms — add hidden ?t
-    document.querySelectorAll('form').forEach(form => {
-      const method = (form.getAttribute('method') || 'GET').toUpperCase();
-      if (method === 'GET' && !form.querySelector('input[name="t"]')) {
-        const input = document.createElement('input');
-        input.type = 'hidden';
-        input.name = 't';
-        input.value = t;
-        form.appendChild(input);
-      }
+      if (!href || /^https?:\/\//i.test(href)) return;   // skip external
+      a.setAttribute('href', addScopeToUrl(href));
     });
   });
 
-  // Patch fetch so same-origin requests also carry ?t=... (if missing)
+  // Monkey-patch fetch to auto-append t & c to same-origin requests
   const _fetch = window.fetch;
-  window.fetch = function (input, init) {
+  window.fetch = function(input, init) {
     try {
-      let url = input instanceof Request ? input.url : String(input);
-      const u = new URL(url, location.origin);
-      if (u.origin === location.origin && t && !u.searchParams.get('t')) {
-        u.searchParams.set('t', t);
-        url = u.toString();
+      if (input instanceof Request) {
+        const scopedUrl = addScopeToUrl(input.url);
+        if (scopedUrl !== input.url) {
+          const cloned = new Request(scopedUrl, {
+            method: input.method,
+            headers: input.headers,
+            body: input.body,
+            mode: input.mode,
+            credentials: input.credentials,
+            cache: input.cache,
+            redirect: input.redirect,
+            referrer: input.referrer,
+            referrerPolicy: input.referrerPolicy,
+            integrity: input.integrity,
+            keepalive: input.keepalive,
+            signal: input.signal
+          });
+          return _fetch(cloned, init || {});
+        }
+        return _fetch(input, init || {});
+      } else {
+        return _fetch(addScopeToUrl(String(input)), init || {});
       }
-      return _fetch.call(this, url, init);
     } catch {
-      return _fetch.call(this, input, init);
+      return _fetch(input, init);
     }
   };
 })();
