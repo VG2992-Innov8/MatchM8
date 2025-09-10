@@ -16,3 +16,6 @@ _diag_bundle/
 /data/*
 !/data/README.md
 
+
+_clean/
+*.zip
