@@ -1,0 +1,7 @@
+/Soccer/node_modules/
+/Basketball/node_modules/
+/Soccer/data/
+/Basketball/data/
+*.log
+*.zip
+.env
