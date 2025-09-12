@@ -1,0 +1,21 @@
+﻿node_modules/
+.env
+
+# local junk
+.vscode/
+.tmp/
+*.log
+
+# backups & diagnostics
+backups/
+_diag_bundle/
+*.zip
+
+# runtime data (persisted on disk, not tracked)
+# keep a README so the folder exists in the repo
+/data/*
+!/data/README.md
+
+
+_clean/
+*.zip

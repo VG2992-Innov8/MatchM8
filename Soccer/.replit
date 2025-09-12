@@ -1,0 +1,10 @@
+run = "npm start"
+modules = ["nodejs-20"]
+
+[nix]
+packages = ["unzip", "run"]
+
+[[ports]]
+localPort = 3000
+externalPort = 80
+

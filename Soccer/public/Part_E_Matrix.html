@@ -1,0 +1,144 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Season Leaderboard â€” Weekly Matrix</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="page">
+  <div id="hero" data-page="Season â€” Weekly Matrix"></div>
+  <script src="/hero.js" defer></script>
+
+  <!-- Identity header (player + tenant selector) -->
+  <script src="/js/mm8-ident.js"></script>
+  <div id="mm8-ident"></div>
+  <script>MM8 && MM8.ident && MM8.ident.mount('#mm8-ident');</script>
+
+  <main class="container">
+    <section class="card">
+      <div class="row" style="gap:12px; flex-wrap:wrap; align-items:center;">
+        <label>Show last
+          <select id="window" class="input" style="min-width:80px">
+            <option>5</option>
+            <option selected>10</option>
+            <option>15</option>
+          </select>
+          weeks
+        </label>
+        <button id="refresh" class="btn">Refresh</button>
+      </div>
+
+      <div id="meta" class="muted" style="margin-top:8px;"></div>
+      <div class="table-wrap" style="margin-top:8px;">
+        <table id="matrix" class="table">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div id="empty" class="muted" style="padding:8px; display:none">
+        No season data yet. Finalise at least one week on the Scoring page.
+      </div>
+    </section>
+  </main>
+
+  <script type="module">
+    /* -------- tenant helpers -------- */
+    function withTenant(url) {
+      const u = new URL(url, location.origin);
+      const t = new URLSearchParams(location.search).get('t') || localStorage.getItem('tenant') || '';
+      if (t) u.searchParams.set('t', t);
+      return u.toString();
+    }
+    // persist tenant from URL if present
+    (function persistTenantFromURL(){
+      const t = new URLSearchParams(location.search).get('t');
+      if (t) { try { localStorage.setItem('tenant', t); } catch {} }
+    })();
+
+    const $ = (s) => document.querySelector(s);
+    const thead = $('#matrix thead');
+    const tbody = $('#matrix tbody');
+    const meta  = $('#meta');
+    const empty = $('#empty');
+    const sel   = $('#window');
+    const btnRefresh = $('#refresh');
+
+    // remember chosen window size across visits
+    (function initWindow(){
+      const saved = localStorage.getItem('matrix_window');
+      if (saved && sel.querySelector(`option[value="${saved}"]`)) sel.value = saved;
+    })();
+
+    async function fetchMatrix(windowSize) {
+      const url = withTenant(`/api/scores/leaderboard/matrix?window=${encodeURIComponent(windowSize)}&_=${Date.now()}`);
+      const r = await fetch(url, { cache: 'no-store' });
+      if (!r.ok) throw new Error(`API ${r.status}`);
+      return r.json();
+    }
+
+    function renderMatrix(data) {
+      thead.innerHTML = '';
+      tbody.innerHTML = '';
+
+      const weeks = Array.isArray(data?.weeks) ? data.weeks : [];
+      const rows  = Array.isArray(data?.rows)  ? data.rows  : [];
+
+      if (!weeks.length || !rows.length) {
+        empty.style.display = 'block';
+        meta.textContent = 'Players: 0';
+        return;
+      }
+      empty.style.display = 'none';
+
+      const head = document.createElement('tr');
+      head.innerHTML = `
+        <th style="width:72px">Rank</th>
+        <th>Player</th>
+        ${weeks.map(w => `<th class="right">Wk ${w}</th>`).join('')}
+        <th class="right">Total</th>
+      `;
+      thead.appendChild(head);
+
+      for (const row of rows) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td class="right">${row.rank}</td>
+          <td>${row.name ?? ''}</td>
+          ${weeks.map(w => `<td class="right">${(row.weekly?.[w] ?? 0)}</td>`).join('')}
+          <td class="right"><b>${row.total ?? 0}</b></td>
+        `;
+        tbody.appendChild(tr);
+      }
+
+      meta.textContent = `Players: ${rows.length} Â· Showing weeks ${weeks[0]}â€“${weeks[weeks.length - 1]} (season-to-date totals)`;
+    }
+
+    async function load() {
+      try {
+        btnRefresh.disabled = true;
+        localStorage.setItem('matrix_window', sel.value);
+        const data = await fetchMatrix(sel.value);
+        renderMatrix(data);
+      } catch (e) {
+        thead.innerHTML = '';
+        tbody.innerHTML = '';
+        empty.style.display = 'block';
+        meta.textContent = 'Players: 0';
+        console.debug('matrix load failed:', e);
+      } finally {
+        btnRefresh.disabled = false;
+      }
+    }
+
+    btnRefresh.addEventListener('click', load);
+    sel.addEventListener('change', load);
+    window.addEventListener('keydown', (e) => { if ((e.key || '').toLowerCase() === 'r') load(); });
+
+    load();
+  </script>
+  <script src="/js/tenant.js"></script>
+</body>
+</html>
+

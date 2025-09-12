@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MatchM8 — Scoring & Leaderboard</title>
+  <link rel="stylesheet" href="style.css"/>
+  <style>
+    .status { margin: 8px 0; font-size: .95rem; color: var(--gray-600); }
+    .err { color: #b91c1c; }
+  </style>
+</head>
+<body>
+<header class="site-header">
+  <h1>MatchM8 — Soccer Prediction Game</h1>
+  <nav class="tabs">
+    <a href="index.html" class="tab">Home</a>
+    <a href="Part_B_Predictions.html" class="tab">Predictions</a>
+    <a href="Part_D_Scoring_System.html" class="tab active">Scoring & Leaderboard</a>
+    <a href="admin_tools.html" class="tab">Admin Tools</a>
+  </nav>
+</header>
+
+<main class="container wide">
+  <h2>Leaderboard</h2>
+
+  <div class="panel row">
+    <div>
+      <label>Week</label>
+      <input type="number" id="weekInput" min="1" value="1"/>
+      <button id="loadWeekBtn" class="btn">Load Week</button>
+      <button id="loadSeasonBtn" class="btn">Season Totals</button>
+    </div>
+  </div>
+
+  <div id="status" class="status"></div>
+
+  <h3 id="tableTitle">Week Leaderboard</h3>
+  <div id="leaderboard"></div>
+
+  <h3>Per-Player Breakdown (this week)</h3>
+  <div id="breakdown"></div>
+</main>
+
+<script>
+const el = s => document.querySelector(s);
+const leaderboardDiv = el('#leaderboard');
+const breakdownDiv = el('#breakdown');
+const weekInput = el('#weekInput');
+const tableTitle = el('#tableTitle');
+const statusEl = el('#status');
+
+async function api(path, opts={}){
+  const res = await fetch(path, opts);
+  const text = await res.text();
+  if(!res.ok){
+    const msg = text || `HTTP ${res.status}`;
+    throw new Error(`${path} -> ${msg}`);
+  }
+  try { return text ? JSON.parse(text) : null; }
+  catch { throw new Error(`${path} -> Invalid JSON`); }
+}
+
+function setStatus(msg, isError=false){
+  statusEl.textContent = msg || '';
+  statusEl.className = 'status' + (isError ? ' err' : '');
+}
+
+function renderTable(container, rows){
+  if(!rows || !rows.length){
+    container.innerHTML = '<p>No data.</p>';
+    return;
+  }
+  const cols = Object.keys(rows[0]);
+  const thead = `<thead><tr>${cols.map(c=>`<th>${c}</th>`).join('')}</tr></thead>`;
+  const tbody = `<tbody>${rows.map(r=>`<tr>${cols.map(c=>`<td>${r[c]}</td>`).join('')}</tr>`).join('')}</tbody>`;
+  container.innerHTML = `<table class="table">${thead}${tbody}</table>`;
+}
+
+async function loadWeek(){
+  const w = parseInt(weekInput.value,10) || 1;
+  setStatus('Loading week ' + w + '…');
+  try{
+    const data = await api(`/api/leaderboard?week=${w}`);
+    tableTitle.textContent = `Week ${w} Leaderboard`;
+    renderTable(leaderboardDiv, data?.week || []);
+    renderTable(breakdownDiv, data?.breakdown || []);
+    setStatus('');
+  }catch(err){
+    setStatus('Error: ' + err.message, true);
+    leaderboardDiv.innerHTML = '';
+    breakdownDiv.innerHTML = '';
+  }
+}
+
+async function loadSeason(){
+  setStatus('Loading season totals…');
+  try{
+    const data = await api('/api/leaderboard?week=all');
+    tableTitle.textContent = 'Season Leaderboard';
+    renderTable(leaderboardDiv, data?.season || []);
+    breakdownDiv.innerHTML = '<p>Breakdown only shown for a specific week.</p>';
+    setStatus('');
+  }catch(err){
+    setStatus('Error: ' + err.message, true);
+    leaderboardDiv.innerHTML = '';
+    breakdownDiv.innerHTML = '';
+  }
+}
+
+el('#loadWeekBtn').addEventListener('click', loadWeek);
+el('#loadSeasonBtn').addEventListener('click', loadSeason);
+
+// auto-load first view
+loadWeek();
+</script>
+</body>
+</html>
+
+
+

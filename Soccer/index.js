@@ -1,0 +1,656 @@
+// index.js — MatchM8 server (prod-ready with ephemeral fallback + seeding + per-request tenant+competition meta)
+const fs   = require('fs');
+const path = require('path');
+
+// ---------- Load .env only in local/dev (never override Render env) ----------
+if (!process.env.RENDER) {
+  require('dotenv').config({ path: path.join(__dirname, '.env'), override: false });
+}
+
+// If DATA_DIR not provided (e.g., free/ephemeral), give lib/paths something writable.
+if (!process.env.DATA_DIR) {
+  const fallback = process.env.RENDER ? '/tmp/matchm8-data' : path.join(__dirname, 'data');
+  process.env.DATA_DIR = fallback;
+  console.log(`[boot] DATA_DIR not set; using ${fallback} ${process.env.RENDER ? '(ephemeral)' : ''}`);
+}
+
+// ---------- SINGLE source of truth for the data directory ----------
+const { DATA_DIR } = require('./lib/paths');   // <- keep only this
+const BASE_DATA_DIR = DATA_DIR;                // optional alias if referenced elsewhere
+
+// Clean up a few env values (after dotenv)
+function cleanToken(s = '') {
+  return String(s)
+    .replace(/\r/g, '')
+    .replace(/\s+#.*$/, '')
+    .replace(/^\s*['"]|['"]\s*$/g, '')
+    .trim();
+}
+if (process.env.ADMIN_TOKEN)        process.env.ADMIN_TOKEN        = cleanToken(process.env.ADMIN_TOKEN);
+if (process.env.LICENSE_PUBKEY_B64) process.env.LICENSE_PUBKEY_B64 = cleanToken(process.env.LICENSE_PUBKEY_B64);
+
+// ---------- One-time reset controlled by env vars ----------
+(function wipeOnBoot() {
+  try {
+    if (process.env.RESET_ALL === '1') {
+      fs.rmSync(path.join(DATA_DIR, 'tenants'), { recursive: true, force: true });
+      console.log('[RESET] Wiped ALL tenants');
+    } else if (process.env.RESET_TENANT) {
+      const t = process.env.RESET_TENANT;
+      fs.rmSync(path.join(DATA_DIR, 'tenants', t), { recursive: true, force: true });
+      console.log(`[RESET] Wiped tenant ${t}`);
+    }
+    // always ensure base exists
+    fs.mkdirSync(path.join(DATA_DIR, 'tenants'), { recursive: true });
+  } catch (e) {
+    console.error('[RESET] Error:', e);
+  }
+})();
+
+// 🔒 Lock to prod
+const APP_MODE = 'prod';
+
+const express = require('express');
+const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const cookieParser = require('cookie-parser');
+const crypto = require('crypto');
+
+// node-fetch polyfill (optional)
+const fetchFn = (...args) =>
+  import('node-fetch').then(({ default: f }) => f(...args)).catch(() => fetch(...args));
+
+// ⬇️ legacy global license bypass flag (dev/demo)
+const SKIP_LICENSE = String(process.env.DEMO_SKIP_LICENSE || '').toLowerCase() === 'true';
+
+/* -------------------- Per-request TENANT + COMPETITION context --------------------
+ * TENANT selection rules (priority):
+ * 1) TENANT_MAP JSON env maps request hostname -> tenant slug
+ * 2) ALLOW_TENANT_OVERRIDE=true lets you pass ?t=TENANT or header x-tenant: TENANT
+ * 3) TENANT env fallback
+ * 4) 'default'
+ *
+ * COMPETITION selection rules (priority):
+ * 1) URL ?c=<COMPETITION> (e.g., EPL-2025, BUNDES-2025, A-LEAGUE-2025)
+ * 2) tenant-level config.json { "defaultCompetition": "EPL-2025" }
+ * 3) DEFAULT_COMP env
+ * 4) "EPL-2025"
+ *
+ * Data root for request = <DATA_DIR>/tenants/<TENANT>/competitions/<COMP>/  (if COMP chosen)
+ * Otherwise legacy root = <DATA_DIR>/tenants/<TENANT>/
+ *
+ * We set req.ctx = { tenant, comp, tenantDir, compDir, dataDir } for downstream routes.
+ */
+function parseTenantMap() { try { return JSON.parse(process.env.TENANT_MAP || '{}'); } catch { return {}; } }
+function sanitizeSlug(s) { return String(s || '').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 64); }
+
+function resolveTenant(req) {
+  const map = parseTenantMap();
+  const host = (req.headers['x-forwarded-host'] || req.hostname || '')
+    .split(':')[0].toLowerCase();
+  let t = map[host];
+  if (!t && process.env.ALLOW_TENANT_OVERRIDE === 'true') {
+    t = req.query.t || req.get('x-tenant');
+  }
+  return sanitizeSlug(t || process.env.TENANT || 'default');
+}
+
+function readJsonIfExists(p, fallback = null) {
+  try { if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf8')); }
+  catch {}
+  return fallback;
+}
+
+function tenantMiddleware(req, _res, next) {
+  try {
+    const tenant = resolveTenant(req);
+    const tenantDir = path.join(DATA_DIR, 'tenants', tenant);
+    fs.mkdirSync(tenantDir, { recursive: true });
+
+    // determine competition (optional)
+    const tenantCfg = readJsonIfExists(path.join(tenantDir, 'config.json'), {});
+    let comp = sanitizeSlug(
+      req.query.c ||
+      tenantCfg?.defaultCompetition ||
+      process.env.DEFAULT_COMP ||
+      'EPL-2025'
+    );
+    // allow blank comp by setting DEFAULT_COMP="" if you want legacy paths
+    if (comp === undefined || comp === null) comp = '';
+    if (comp === 'default') comp = '';
+
+    // derive compDir and dataDir
+    const compDir = comp ? path.join(tenantDir, 'competitions', comp) : tenantDir;
+    fs.mkdirSync(compDir, { recursive: true });
+
+    // Ensure common subdirs exist under the chosen dataDir
+    const dataDir = compDir;
+    const subdirs = ['fixtures', 'results', 'predictions', path.join('scores', 'weeks'), 'scores'];
+    for (const rel of subdirs) {
+      try { fs.mkdirSync(path.join(dataDir, rel), { recursive: true }); } catch {}
+    }
+
+    req.ctx = { tenant, comp, tenantDir, compDir, dataDir };
+  } catch {
+    req.ctx = { tenant: process.env.TENANT || 'default', comp: '', tenantDir: BASE_DATA_DIR, compDir: BASE_DATA_DIR, dataDir: BASE_DATA_DIR };
+  }
+  next();
+}
+
+// Ensure repo-level data exists + optional seed (global)
+function ensureDataDirsAndSeed() {
+  const subdirs = ['.', 'fixtures', 'results', 'predictions', path.join('scores', 'weeks'), 'scores'];
+  for (const rel of subdirs) {
+    try { fs.mkdirSync(path.join(DATA_DIR, rel), { recursive: true }); } catch {}
+  }
+  const seedDir = path.join(__dirname, 'data', '_seed');
+  const seededMarker = path.join(DATA_DIR, '.seeded');
+  try {
+    const already = fs.existsSync(seededMarker);
+    const hasSeed = fs.existsSync(seedDir);
+    if (!already && hasSeed) {
+      fs.cpSync(seedDir, DATA_DIR, { recursive: true, force: false, errorOnExist: false });
+      fs.writeFileSync(seededMarker, new Date().toISOString());
+      console.log(`[boot] Seeded demo data from ${seedDir} -> ${DATA_DIR}`);
+    }
+  } catch (e) {
+    console.warn('[boot] Seeding skipped:', e.message);
+  }
+}
+ensureDataDirsAndSeed();
+
+// ----- App setup -----
+const app = express();
+app.set('trust proxy', 1);               // ✅ for Render/Railway/any proxy
+const PORT = process.env.PORT || 3000;   // ✅ use platform port if provided
+
+const joinRepo = (...p) => path.join(__dirname, ...p);
+const joinData = (...p) => path.join(DATA_DIR, ...p);
+const CONFIG_PATH = joinData('config.json'); // global legacy (not per-tenant)
+
+// --- config defaults used if data/config.json is missing ---
+const DEFAULT_CONFIG = {
+  season: 2025,
+  total_weeks: 38,
+  current_week: 1,
+  lock_minutes_before_kickoff: 10,
+  deadline_mode: 'first_kickoff',
+  timezone: 'Australia/Melbourne'
+};
+
+// helpers to read/write global config.json safely (legacy)
+function readConfig() {
+  try {
+    const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
+    const obj = JSON.parse(raw);
+    return { ...DEFAULT_CONFIG, ...obj };
+  } catch {
+    return { ...DEFAULT_CONFIG };
+  }
+}
+function writeConfig(cfg) {
+  try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch {}
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
+}
+
+/* ---- TENANT + COMP config helpers ---- */
+function cfgPathFor(req) {
+  // competition-scoped config (season, tz, locks, etc.)
+  const base = req?.ctx?.dataDir || DATA_DIR;
+  return path.join(base, 'config.json');
+}
+function readConfigFor(req) {
+  try {
+    const raw = fs.readFileSync(cfgPathFor(req), 'utf8');
+    const obj = JSON.parse(raw);
+    return { ...DEFAULT_CONFIG, ...obj };
+  } catch {
+    return { ...DEFAULT_CONFIG };
+  }
+}
+function writeConfigFor(req, cfg) {
+  const base = req?.ctx?.dataDir || DATA_DIR;
+  try { fs.mkdirSync(base, { recursive: true }); } catch {}
+  fs.writeFileSync(cfgPathFor(req), JSON.stringify(cfg, null, 2));
+}
+
+// TENANT-level config helpers (license, defaults)
+function tenantCfgPathFor(req) {
+  const base = req?.ctx?.tenantDir || path.join(DATA_DIR, 'tenants', resolveTenant(req));
+  return path.join(base, 'config.json');
+}
+function readTenantConfigFor(req) {
+  try {
+    const raw = fs.readFileSync(tenantCfgPathFor(req), 'utf8');
+    return JSON.parse(raw);
+  } catch { return {}; }
+}
+function writeTenantConfigFor(req, patch) {
+  const p = tenantCfgPathFor(req);
+  let prev = {};
+  try { prev = JSON.parse(fs.readFileSync(p, 'utf8')); } catch {}
+  const next = { ...prev, ...patch };
+  try { fs.mkdirSync(path.dirname(p), { recursive: true }); } catch {}
+  fs.writeFileSync(p, JSON.stringify(next, null, 2));
+  return next;
+}
+
+// timing-safe admin-token guard
+function timingSafeEqual(a = '', b = '') {
+  const A = Buffer.from(a);
+  const B = Buffer.from(b);
+  if (A.length !== B.length) return false;
+  try { return crypto.timingSafeEqual(A, B); } catch { return false; }
+}
+function requireAdminToken(req, res, next) {
+  const token = cleanToken(req.headers['x-admin-token'] || '');
+  const expected = process.env.ADMIN_TOKEN || '';
+  if (!token || !expected || !timingSafeEqual(token, expected)) {
+    return res.status(401).json({ ok: false, error: 'invalid admin token' });
+  }
+  next();
+}
+
+/* -------------------- Global license (legacy) -------------------- */
+const license = require('./lib/license');
+license.loadAndValidate().then(s => {
+  console.log('License:', s.reason);
+});
+function requireValidLicense(_req, res, next) {
+  const s = license.getStatus();
+  if (!s.ok) return res.status(403).json({ error: 'License invalid: ' + s.reason });
+  next();
+}
+
+/* -------------------- Per-tenant signed license (HMAC) -------------------- */
+/* Token format:
+ * token = base64url(JSON payload) + "." + base64url(HMAC_SHA256(payload, LICENSE_SECRET))
+ * claims example: { tenant:"GEEVES-2025", plan:"Starter", seats:5, exp:"2026-01-01T00:00:00Z" }
+ */
+function b64urlEncode(bufOrStr) {
+  const b = Buffer.isBuffer(bufOrStr) ? bufOrStr : Buffer.from(String(bufOrStr));
+  return b.toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+function b64urlDecode(str) {
+  str = str.replace(/-/g,'+').replace(/_/g,'/'); while (str.length % 4) str += '=';
+  return Buffer.from(str, 'base64').toString('utf8');
+}
+function verifyTenantLicenseToken(token, secret) {
+  if (!token || typeof token !== 'string' || !token.includes('.')) return { ok:false, reason:'malformed' };
+  if (!secret) return { ok:false, reason:'missing LICENSE_SECRET' };
+  const [body, sig] = token.split('.');
+  const expected = b64urlEncode(crypto.createHmac('sha256', secret).update(body).digest());
+  if (sig !== expected) return { ok:false, reason:'bad signature' };
+  let claims;
+  try { claims = JSON.parse(b64urlDecode(body)); }
+  catch { return { ok:false, reason:'bad payload' }; }
+  return { ok:true, claims };
+}
+function getTenantLicenseClaims(req) {
+  // IMPORTANT: license is stored at TENANT ROOT, not per-competition
+  const cfg = readTenantConfigFor(req);
+  const token  = String(cfg.license_token || '');
+  const secret = process.env.LICENSE_SECRET || '';
+  const v = verifyTenantLicenseToken(token, secret);
+  if (!v.ok) return v;
+  const c = v.claims || {};
+  const curTenant = req.ctx?.tenant || 'default';
+  if (c.tenant && c.tenant !== curTenant) return { ok:false, reason:'tenant mismatch', claims:c };
+  if (c.exp && Date.now() > Date.parse(c.exp)) return { ok:false, reason:'expired', claims:c };
+  return { ok:true, claims:c };
+}
+function requireValidTenantLicense(req, res, next) {
+  if (String(process.env.DEMO_SKIP_LICENSE || '').toLowerCase() === 'true') return next(); // dev/demo bypass
+  const v = getTenantLicenseClaims(req);
+  if (!v.ok) return res.status(403).json({ ok:false, error: 'License invalid: ' + (v.reason || 'unknown') });
+  req.license = v.claims;
+  next();
+}
+// Optional: enforce seat cap on player creation only (per competition, since players live under comp dataDir)
+function enforceSeatLimitOnPlayerCreate(req, res, next) {
+  if (req.method.toUpperCase() !== 'POST') return next();
+  if (String(process.env.DEMO_SKIP_LICENSE || '').toLowerCase() === 'true') return next();
+  const v = getTenantLicenseClaims(req);
+  if (!v.ok) return res.status(403).json({ ok:false, error: 'No valid tenant license' });
+  const seats = Number(v.claims?.seats);
+  if (!Number.isFinite(seats) || seats <= 0) return res.status(403).json({ ok:false, error:'Seat limit not set' });
+
+  const p = path.join(req.ctx.dataDir, 'players.json'); // comp-scoped
+  let players = [];
+  try { players = JSON.parse(fs.readFileSync(p, 'utf8')); } catch {}
+  if (players.length >= seats) {
+    return res.status(403).json({ ok:false, error: `Seat limit reached (${seats})` });
+  }
+  next();
+}
+
+// -------------------- Global middleware --------------------
+const ALLOW = (process.env.CORS_ORIGIN || '')
+  .split(',').map(s => s.trim()).filter(Boolean);
+
+if (ALLOW.length) {
+  app.use(cors({
+    origin: (origin, cb) => (!origin || ALLOW.includes(origin)) ? cb(null, origin) : cb(new Error('Not allowed by CORS')),
+    credentials: false
+  }));
+} else {
+  app.use(cors());
+}
+
+app.use(helmet({ contentSecurityPolicy: false }));         // allow inline admin UI scripts
+const adminLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200 });
+app.use('/api/admin', adminLimiter);
+
+app.use(cookieParser());
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: false }));
+
+// 🔑 Per-request TENANT + COMP context
+app.use(tenantMiddleware);
+
+// Health
+app.get('/health', (_req, res) => res.json({ ok: true, mode: APP_MODE, ts: Date.now() }));
+app.get('/healthz', (_req, res) => res.status(200).send('ok'));
+
+// Quick meta
+app.get('/api/__meta', (req, res) => {
+  res.json({
+    ok: true,
+    tenant: req.ctx?.tenant || (process.env.TENANT || 'default'),
+    competition: req.ctx?.comp || '',
+    tenantDir: req.ctx?.tenantDir || null,
+    dataDir: req.ctx?.dataDir || DATA_DIR,
+    appTitle: process.env.APP_TITLE || 'MatchM8'
+  });
+});
+
+// ✅ Public READ results (tenant+comp aware) — normalize legacy shapes
+app.get('/api/results', (req, res) => {
+  try {
+    const wk = Math.max(1, parseInt(req.query.week, 10) || 1);
+    const p = path.join(req.ctx.dataDir, 'results', `week-${wk}.json`);
+    let obj = {};
+    try { obj = JSON.parse(fs.readFileSync(p, 'utf8')); } catch {}
+
+    const normalize = (v) => {
+      if (!v || typeof v !== 'object') return null;
+      const shapes = [
+        ['home','away'],
+        ['home_score','away_score'],
+        ['homeGoals','awayGoals'],
+        ['h','a']
+      ];
+      for (const [hk, ak] of shapes) {
+        let h = v[hk], a = v[ak];
+        if (h != null && a != null) {
+          h = parseInt(h, 10); a = parseInt(a, 10);
+          if (Number.isFinite(h) && Number.isFinite(a)) return { home: h, away: a };
+        }
+      }
+      return null;
+    };
+
+    const cleaned = Object.fromEntries(
+      Object.entries(obj).map(([k, v]) => [k, normalize(v)]).filter(([,nv]) => !!nv)
+    );
+    res.json({ ok: true, week: wk, results: cleaned });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Tenant+comp-aware aliases for legacy static links
+app.get(/^\/data\/(fixtures|results|scores)\/(.+)$/, (req, res, next) => {
+  try {
+    const bucket = req.params[0];
+    const rest   = req.params[1];
+    const p = path.join(req.ctx?.dataDir || DATA_DIR, bucket, rest);
+    if (fs.existsSync(p)) return res.sendFile(p);
+  } catch {}
+  next();
+});
+
+// Global/static fallbacks (serve repo-level data if present)
+app.use('/data/scores',   express.static(joinData('scores')));
+app.use('/data/fixtures', express.static(joinData('fixtures')));
+
+// Public assets
+app.use(express.static(joinRepo('public')));
+app.use('/ui', express.static(joinRepo('ui')));
+
+// Fix old encoded URLs (legacy)
+app.use((req, res, next) => {
+  if (req.url.includes('%3F') || req.url.includes('%26')) {
+    const fixed = req.url.replace(/%3F/gi, '?').replace(/%26/gi, '&');
+    return res.redirect(fixed);
+  }
+  next();
+});
+
+/* -------------------- /api/config (competition-scoped) -------------------- */
+app.get('/api/config', (req, res) => res.json(readConfigFor(req)));
+app.post('/api/config', requireAdminToken, (req, res) => {
+  const prev = readConfigFor(req);
+  const next = { ...prev, ...req.body };
+
+  if ('total_weeks' in req.body) next.total_weeks = Math.max(1, parseInt(req.body.total_weeks, 10) || prev.total_weeks);
+  if ('current_week' in req.body) next.current_week = Math.max(1, parseInt(req.body.current_week, 10) || prev.current_week);
+  if ('lock_minutes_before_kickoff' in req.body) next.lock_minutes_before_kickoff = Math.max(0, parseInt(req.body.lock_minutes_before_kickoff, 10) || 0);
+  if ('season' in req.body) next.season = parseInt(req.body.season, 10) || prev.season;
+  if ('deadline_mode' in req.body) next.deadline_mode = (req.body.deadline_mode === 'per_match') ? 'per_match' : 'first_kickoff';
+  if ('timezone' in req.body) next.timezone = String(req.body.timezone || prev.timezone);
+
+  writeConfigFor(req, next);
+  res.json({ ok: true, config: next });
+});
+
+/* -------------------- Tenant license endpoints (TENANT-LEVEL) -------------------- */
+// Public status for current tenant
+app.get('/api/tenant/license/status', (req, res) => {
+  const v = getTenantLicenseClaims(req);
+  res.json({ ok: v.ok, reason: v.reason || 'ok', claims: v.claims || null });
+});
+// Admin: apply/update tenant license token (writes to TENANT ROOT config.json)
+app.post('/api/tenant/license/apply', requireAdminToken, express.json(), (req, res) => {
+  const token = String(req.body?.token || '').trim();
+  if (!token) return res.status(400).json({ ok:false, error:'missing token' });
+  writeTenantConfigFor(req, { license_token: token });
+  const v = getTenantLicenseClaims(req);
+  res.json({ ok: v.ok, reason: v.reason || 'ok', claims: v.claims || null });
+});
+// (Optional) set defaultCompetition at tenant level
+app.post('/api/tenant/default-competition', requireAdminToken, express.json(), (req, res) => {
+  const val = String(req.body?.defaultCompetition || '').trim();
+  writeTenantConfigFor(req, { defaultCompetition: val });
+  res.json({ ok: true, defaultCompetition: val });
+});
+
+/* -------------------- Safe require + mount -------------------- */
+const mounted = []; // ← define ONCE, up here
+
+function safeRequire(label, p) {
+  try {
+    const mod = require(p);
+    console.log(`[boot] mounted ${label} at runtime path ${p}`);
+    return { ok: true, mod };
+  } catch (e) {
+    console.warn(`[boot] Skipping ${label}: ${e.message}`);
+    return { ok: false, mod: null, reason: e.message };
+  }
+}
+function mount(label, route, mod) {
+  app.use(route, mod);
+  mounted.push({ label, route });
+}
+
+// Fixtures (try user route first)
+const fixtures = safeRequire('./routes/fixtures.js', './routes/fixtures');
+if (fixtures.ok) {
+  mount('./routes/fixtures.js', '/api/fixtures', fixtures.mod);
+  mount('./routes/fixtures.js', '/fixtures', fixtures.mod);
+} else {
+  // Fallback public fixtures: tenant+comp aware (uses competition config for season)
+  app.get('/api/fixtures', (req, res) => {
+    const cfg = readConfigFor(req);
+    const week = Math.max(1, parseInt(req.query.week, 10) || 1);
+    const season = cfg.season || 2025;
+    const fpath = path.join(req.ctx.dataDir, 'fixtures', `season-${season}`, `week-${week}.json`);
+    try {
+      const txt = fs.readFileSync(fpath, 'utf8');
+      const arr = JSON.parse(txt);
+      if (Array.isArray(arr)) return res.json(arr);
+      if (arr && Array.isArray(arr.fixtures)) return res.json(arr.fixtures);
+      return res.json([]);
+    } catch {
+      return res.json([]);
+    }
+  });
+  mounted.push({ label: '(inline)/api/fixtures', route: '/api/fixtures' });
+}
+
+// Predictions
+const predictions = safeRequire('./routes/predictions.js', './routes/predictions');
+if (predictions.ok) {
+  mount('./routes/predictions.js', '/api/predictions', predictions.mod);
+  mount('./routes/predictions.js', '/predictions', predictions.mod);
+}
+
+// ✅ Results — admin/file upsert router (mounted AFTER public GET above)
+const resultsRt = safeRequire('./routes/results.js', './routes/results');
+if (resultsRt.ok) {
+  mount('./routes/results.js', '/api/results', resultsRt.mod); // e.g., /upsert endpoints
+}
+
+// Scores — tenant-gated (DEMO_SKIP_LICENSE bypass handled in middleware)
+const scores = safeRequire('./routes/scores.js', './routes/scores');
+if (scores.ok) {
+  app.use('/api/scores', requireValidTenantLicense, scores.mod);
+  app.use('/scores',     requireValidTenantLicense, scores.mod);
+  mounted.push({ label: './routes/scores.js', route: '/api/scores' });
+  mounted.push({ label: './routes/scores.js', route: '/scores' });
+}
+
+// Auth
+const auth = safeRequire('./routes/auth.js', './routes/auth');
+if (auth.ok) {
+  mount('./routes/auth.js', '/api/auth', auth.mod);
+  mount('./routes/auth.js', '/auth', auth.mod);
+}
+
+// Players — enforce seat cap ON CREATE only (no gate for GET/list)
+const players = safeRequire('./routes/players.js', './routes/players');
+if (players.ok) {
+  app.use('/api/players', enforceSeatLimitOnPlayerCreate, players.mod);
+  app.use('/players',     enforceSeatLimitOnPlayerCreate, players.mod);
+  mounted.push({ label: './routes/players.js', route: '/api/players' });
+  mounted.push({ label: './routes/players.js', route: '/players' });
+}
+
+/* -------------------- LICENSE ENDPOINTS (global legacy) -------------------- */
+app.get('/api/license/status', (_req, res) => res.json(license.getStatus()));
+app.post('/api/license/apply', requireAdminToken, express.json(), async (req, res) => {
+  try {
+    const token = String(req.body?.license || '').trim();
+    if (!token) return res.status(400).json({ ok: false, error: 'missing license' });
+
+    const prev = readConfig();
+    const next = { ...prev, license: { token, appliedAt: new Date().toISOString() } };
+    writeConfig(next);
+
+    await license.loadAndValidate().catch(e => ({ ok: false, reason: String(e) }));
+    return res.json({ ok: !!license.getStatus().ok, status: license.getStatus() });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+app.post('/api/admin/license', requireAdminToken, express.json(), async (req, res) => {
+  try {
+    const token = String(req.body?.license || '').trim();
+    if (!token) return res.status(400).json({ ok: false, error: 'missing license' });
+    const prev = readConfig();
+    const next = { ...prev, license: { token, appliedAt: new Date().toISOString() } };
+    writeConfig(next);
+    await license.loadAndValidate().catch(e => ({ ok: false, reason: String(e) }));
+    return res.json({ ok: !!license.getStatus().ok, status: license.getStatus() });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+app.get('/api/admin/license/status', requireAdminToken, (_req, res) => {
+  return res.json(license.getStatus());
+});
+
+// ---- Admin auth (mounted BEFORE other /api/admin routes) ----
+const adminAuth = require('./routes/admin_auth');
+app.use('/api/admin', adminAuth);
+
+// ---- Admin routes ----
+const admin = safeRequire('./routes/admin.js', './routes/admin');
+if (admin.ok) {
+  mount('./routes/admin.js', '/api/admin', admin.mod);
+}
+
+// ---- Locks route — tenant-gated (DEMO_SKIP_LICENSE bypass handled in middleware) ----
+{
+  const locksRt = safeRequire('./routes/locks.js', './routes/locks');
+  if (locksRt.ok) {
+    app.use('/api/locks', requireValidTenantLicense, locksRt.mod);
+    mounted.push({ label: './routes/locks.js', route: '/api/locks' });
+  } else {
+    console.warn('Skipping ./routes/locks.js:', (locksRt.reason || 'failed to load'));
+  }
+}
+
+/* -------------------- Diagnostics -------------------- */
+app.get('/api/__health', (req, res) =>
+  res.json({
+    ok: true,
+    mounted,
+    mode: APP_MODE,
+    dataDir_global: DATA_DIR,
+    tenant: req.ctx?.tenant || null,
+    competition: req.ctx?.comp || '',
+    tenantDir: req.ctx?.tenantDir || null,
+    dataDir_request: req.ctx?.dataDir || null
+  })
+);
+app.get('/api/__routes', (_req, res) => res.json(mounted));
+
+/* -------------------- Map UI pages -------------------- */
+[
+  'Part_A_PIN.html',
+  'Part_B_Predictions.html',
+  'Part_D_Scoring.html',
+  'Part_E_Season.html',
+  'Part_E_Matrix.html',
+  'admin.html'
+].forEach(page => {
+  app.get('/' + page, (_req, res) => res.sendFile(joinRepo('public', page)));
+});
+
+/* -------------------- Root -------------------- */
+app.get('/', (_req, res) => res.sendFile(joinRepo('public', 'Part_A_PIN.html')));
+
+/* -------------------- Listen -------------------- */
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`MatchM8 listening on port ${PORT} (mode=${APP_MODE})`);
+  console.log(`DATA_DIR (global) = ${DATA_DIR}`);
+
+  // Auto-apply LICENSE_TOKEN on boot (works on Free plan without a disk)
+  try {
+    const tok = cleanToken(process.env.LICENSE_TOKEN || '');
+    if (tok) {
+      const prev = readConfig();
+      const next = { ...prev, license: { token: tok, appliedAt: new Date().toISOString() } };
+      writeConfig(next);
+      license.loadAndValidate()
+        .then(s => console.log('[license] auto-apply on boot:', s.reason))
+        .catch(err => console.error('[license] auto-apply failed:', err.message));
+    } else {
+      console.log('[license] no LICENSE_TOKEN env; skipping auto-apply');
+    }
+  } catch (e) {
+    console.error('[license] auto-apply error:', e.message);
+  }
+});

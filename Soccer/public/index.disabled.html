@@ -1,0 +1,45 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MatchM8 – Login</title>
+  
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="title-bar">MatchM8 Soccer Predictions</div>
+  <div class="subtitle-bar">Enter your details to continue.</div>
+
+  <div class="login-box">
+    <form id="login-form">
+      <input type="text" id="nameOrEmail" placeholder="Player ID or Name" required />
+      <input type="number" id="week" placeholder="Week #" required />
+      <input type="password" id="pin" placeholder="4-digit PIN" required maxlength="4" />
+
+      <button type="submit" class="matchm8-button">Continue</button>
+    </form>
+  </div>
+
+  <script>
+   document.getElementById("login-form").addEventListener("submit", function (e) {
+  e.preventDefault();
+  const name = document.getElementById("nameOrEmail").value.trim();
+  const week = document.getElementById("week").value.trim();
+  const pin = document.getElementById("pin").value.trim();
+
+  if (name.toLowerCase() === "admin") {
+    // Save token if needed
+    localStorage.setItem("adminToken", pin);
+    window.location.href = `admin.html?week=${week || 1}`;
+  } else {
+    window.location.href = `Part_B_Predictions.html?nameOrEmail=${encodeURIComponent(name)}&week=${week}&pin=${pin}`;
+  }
+});
+  </script>
+  <script src="/js/tenant.js"></script>
+</body>
+</html>
+
+
+

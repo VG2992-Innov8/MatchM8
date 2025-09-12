@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta http-equiv="Cache-Control" content="no-store"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MatchM8 — Admin Tools</title>
+  <link rel="stylesheet" href="style.css"/>
+  <style>
+    .to-top { position: fixed; right: 16px; bottom: 16px; padding: 10px 14px; }
+    .grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+    @media (max-width: 900px){ .grid-2{ grid-template-columns:1fr; } }
+    .danger{ background:var(--red-600); color:white; }
+  </style>
+</head>
+<body>
+<header class="site-header">
+  <h1>MatchM8 — Soccer Prediction Game</h1>
+  <nav class="tabs">
+    <a href="index.html" class="tab">Home</a>
+    <a href="Part_B_Predictions.html" class="tab">Predictions</a>
+    <a href="Part_D_Scoring_System.html" class="tab">Scoring & Leaderboard</a>
+    <a href="admin_tools.html" class="tab active">Admin Tools</a>
+  </nav>
+</header>
+
+<main class="container wide">
+  <h2>Admin Tools</h2>
+
+  <section class="panel">
+    <h3>Auth</h3>
+    <div class="row">
+      <label for="adminToken">x-admin-token</label>
+      <input id="adminToken" type="password" placeholder="Paste ADMIN_TOKEN"/>
+      <button id="autofillBtn" class="btn">Auto-fill (dev)</button>
+    </div>
+  </section>
+
+  <div class="grid-2">
+
+    <section class="panel">
+      <h3>Set Week Start / Lock</h3>
+      <div class="row">
+        <label>Week</label>
+        <input type="number" id="weekStartWeek" min="1" value="1"/>
+      </div>
+      <div class="row">
+        <label>Kickoff (ISO)</label>
+        <input type="text" id="weekStartIso" placeholder="2025-08-15T19:30:00+10:00"/>
+      </div>
+      <button id="setWeekStartBtn" class="btn primary">Set Week Start</button>
+      <div id="weekStartMsg" class="note"></div>
+    </section>
+
+    <section class="panel">
+      <h3>Fixtures (Add / Edit / Delete)</h3>
+      <div class="row">
+        <label>Week</label>
+        <input type="number" id="fxWeek" min="1" value="1"/>
+        <button id="fxLoadBtn" class="btn">Load</button>
+        <button id="fxSeedBtn" class="btn">Seed 10</button>
+      </div>
+      <div id="fixturesList"></div>
+
+      <h4>Add Fixture</h4>
+      <div class="row">
+        <input id="fxNo" type="number" placeholder="Match #" min="1"/>
+        <input id="fxHome" type="text" placeholder="Home"/>
+        <input id="fxAway" type="text" placeholder="Away"/>
+        <button id="fxAddBtn" class="btn primary">Add</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h3>Results Input (Protected)</h3>
+      <div class="row">
+        <label>Week</label>
+        <input type="number" id="resWeek" min="1" value="1"/>
+        <button id="resLoadBtn" class="btn">Load Fixtures</button>
+      </div>
+      <div id="resList"></div>
+      <div class="row">
+        <button id="resSaveBtn" class="btn primary">Save Results</button>
+      </div>
+      <div class="row">
+        <button id="resClearBtn" class="btn danger">Clear All Results (Week)</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h3>Predictions & Week Maintenance</h3>
+      <div class="row">
+        <label>Week</label>
+        <input type="number" id="maintWeek" min="1" value="1"/>
+      </div>
+      <div class="row">
+        <button id="clearPredBtn" class="btn">Clear Predictions (Week)</button>
+        <button id="deleteWeekBtn" class="btn danger">Delete Entire Week</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h3>Player Payments (Season)</h3>
+      <div class="row">
+        <label>Season</label>
+        <input type="text" id="seasonInput" value="2025"/>
+        <button id="loadPaymentsBtn" class="btn">Load</button>
+      </div>
+      <div id="paymentsList"></div>
+    </section>
+
+    <section class="panel">
+      <h3>Player Management (Admin Only)</h3>
+      <div class="row">
+        <input id="newPlayerName" type="text" placeholder="Player name"/>
+        <button id="addPlayerBtn" class="btn primary">Add Player</button>
+      </div>
+      <div id="playersList"></div>
+    </section>
+
+  </div>
+
+  <button class="btn to-top" id="toTopBtn">Top of Page ↑</button>
+</main>
+
+<script>
+const adminTokenInput = document.querySelector('#adminToken');
+
+function hdrs(){
+  const h = { 'Content-Type':'application/json' };
+  const t = adminTokenInput.value.trim();
+  if(t) h['x-admin-token']=t;
+  return h;
+}
+async function j(url, opt={}){
+  const res = await fetch(url, opt);
+  if(!res.ok){
+    const t = await res.text();
+    throw new Error(`${res.status} ${url} -> ${t}`);
+  }
+  return res.json().catch(()=> ({}));
+}
+function needToken(){
+  if(!adminTokenInput.value.trim()){
+    alert('Please enter the x-admin-token in the Auth section first.');
+    return false;
+  }
+  return true;
+}
+
+// Auto-fill token (dev only)
+document.querySelector('#autofillBtn').addEventListener('click', async ()=>{
+  try{
+    const res = await fetch('/api/admin/token');
+    if(res.ok){
+      const { token } = await res.json();
+      adminTokenInput.value = token || '';
+      alert('Token auto-filled (dev).');
+    }else{
+      alert('Auto-fill disabled in prod.');
+    }
+  }catch(e){ alert('Auto-fill failed.'); }
+});
+
+// Week start
+document.querySelector('#setWeekStartBtn').addEventListener('click', async ()=>{
+  if(!needToken()) return;
+  const week = Number(document.querySelector('#weekStartWeek').value);
+  const starts_at = document.querySelector('#weekStartIso').value.trim();
+  try{
+    await j('/api/admin/set-week-start', { method:'POST', headers:hdrs(), body:JSON.stringify({week, starts_at}) });
+    document.querySelector('#weekStartMsg').textContent = 'Week start set.';
+  }catch(e){ alert(e.message); }
+});
+
+// Fixtures
+const fxWeek = document.querySelector('#fxWeek');
+const fxList = document.querySelector('#fixturesList');
+
+async function loadFixtures(){
+  const week = Number(fxWeek.value);
+  const data = await j(`/api/admin/fixtures?week=${week}`, { headers: hdrs() });
+  fxList.innerHTML = data.map(m=>{
+    return `
+      <div class="row" data-id="${m.id}">
+        <input class="fx-no" type="number" value="${m.match_no}" style="width:90px"/>
+        <input class="fx-home" type="text" value="${m.home}"/>
+        <input class="fx-away" type="text" value="${m.away}"/>
+        <button class="btn save">Save</button>
+        <button class="btn danger del">Delete</button>
+      </div>`;
+  }).join('') || '<p>No fixtures yet.</p>';
+
+  fxList.querySelectorAll('.save').forEach(btn=>{
+    btn.addEventListener('click', async (e)=>{
+      if(!needToken()) return;
+      const row = e.target.closest('.row');
+      const id = row.dataset.id?.trim();
+      const match_no = Number(row.querySelector('.fx-no').value);
+      const home = row.querySelector('.fx-home').value.trim();
+      const away = row.querySelector('.fx-away').value.trim();
+      if(!id){ alert('Missing match id'); return; }
+      try{
+        await j(`/api/admin/fixtures/${encodeURIComponent(id)}`, {
+          method:'PATCH', headers:hdrs(), body:JSON.stringify({ match_no, home, away })
+        });
+        alert('Saved.');
+      }catch(err){ alert(err.message); }
+    });
+  });
+
+  fxList.querySelectorAll('.del').forEach(btn=>{
+    btn.addEventListener('click', async (e)=>{
+      if(!needToken()) return;
+      const row = e.target.closest('.row');
+      const id = row.dataset.id?.trim();
+      if(!id){ alert('Missing match id'); return; }
+      if(!confirm('Delete fixture (and clear its predictions/results)?')) return;
+      try{
+        await j(`/api/admin/fixtures/${encodeURIComponent(id)}`, {
+          method:'DELETE', headers:hdrs()
+        });
+        row.remove();
+      }catch(err){ alert(err.message); }
+    });
+  });
+}
+document.querySelector('#fxLoadBtn').addEventListener('click', async ()=>{
+  if(!needToken()) return;
+  await loadFixtures();
+});
+
+document.querySelector('#fxAddBtn').addEventListener('click', async ()=>{
+  if(!needToken()) return;
+  const week = Number(fxWeek.value);
+  const match_no = Number(document.querySelector('#fxNo').value);
+  const home = document.querySelector('#fxHome').value.trim();
+  const away = document.querySelector('#fxAway').value.trim();
+  try{
+    await j('/api/admin/fixtures', { method:'POST', headers:hdrs(), body:JSON.stringify({ week, match_no, home, away }) });
+    await loadFixtures();
+  }catch(e){ alert(e.message); }
+});
+
+document.querySelector('#fxSeedBtn').addEventListener('click', async ()=>{
+  if(!needToken()) return;
+  const week = Number(fxWeek.value);
+  try{
+    const r = await j('/api/admin/seed-week', { method:'POST', headers:hdrs(), body:JSON.stringify({ week }) });
+    await loadFixtures();
+    alert(`Seeded ${r.created} new; skipped ${r.skipped} existing.`);
+  }catch(e){ alert(e.message); }
+});
+
+// Results Input
+const resList = document.querySelector('#resList');
+
+async function loadResFixtures(){
+  const week = Number(document.querySelector('#resWeek').value);
+  const data = await j(`/api/admin/fixtures?week=${week}`, { headers: hdrs() });
+  resList.innerHTML = data.map(m=>{
+    return `
+      <div class="row" data-id="${m.id}">
+        <div style="min-width:260px;">${m.match_no}. ${m.home} vs ${m.away}</div>
+        <input class="res-home" type="number" min="0" placeholder="Home"/>
+        <span>—</span>
+        <input class="res-away" type="number" min="0" placeholder="Away"/>
+      </div>`;
+  }).join('') || '<p>No fixtures for that week.</p>';
+}
+document.querySelector('#resLoadBtn').addEventListener('click', async ()=>{
+  if(!needToken()) return;
+  await loadResFixtures();
+});
+
+document.querySelector('#resSaveBtn').addEventListener('click', async ()=>{
+  if(!needToken()) return;
+  const rows = Array.from(resList.querySelectorAll('.row[data-id]'));
+  const payload = rows.map(r=>{
+    const id = r.dataset.id?.trim();
+    const home_goals = r.querySelector('.res-home').value;
+    const away_goals = r.querySelector('.res-away').value;
+    if(!id || home_goals==='' || away_goals==='') return null;
+    return { match_id:id, home_goals:Number(home_goals), away_goals:Number(away_goals) };
+  }).filter(Boolean);
+
+  if(!payload.length){ alert('Nothing to save.'); return; }
+
+  try{
+    await j('/api/results', { method:'POST', headers:hdrs(), body:JSON.stringify({ results: payload }) });
+    alert('Results saved.');
+  }catch(e){ alert(e.message); }
+});
+
+document.querySelector('#resClearBtn').addEventListener('click', async ()=>{
+  if(!needToken()) return;
+  const week = Number(document.querySelector('#maintWeek').value || document.querySelector('#resWeek').value);
+  if(!confirm(`Clear ALL results for week ${week}?`)) return;
+  try{
+    await j('/api/admin/clear-results', { method:'POST', headers:hdrs(), body:JSON.stringify({ week }) });
+    alert('Cleared.');
+  }catch(e){ alert(e.message); }
+});
+
+// Maintenance
+document.querySelector('#clearPredBtn').addEventListener('click', async ()=>{
+  if(!needToken()) return;
+  const week = Number(document.querySelector('#maintWeek').value);
+  if(!confirm(`Clear ALL predictions for week ${week}?`)) return;
+  try{
+    await j('/api/admin/clear-predictions', { method:'POST', headers:hdrs(), body:JSON.stringify({ week }) });
+    alert('Cleared.');
+  }catch(e){ alert(e.message); }
+});
+
+document.querySelector('#deleteWeekBtn').addEventListener('click', async ()=>{
+  if(!needToken()) return;
+  const week = Number(document.querySelector('#maintWeek').value);
+  if(!confirm(`Delete entire week ${week}? (fixtures, predictions, results)`)) return;
+  try{
+    await j('/api/admin/delete-week', { method:'POST', headers:hdrs(), body:JSON.stringify({ week }) });
+    alert('Deleted.');
+  }catch(e){ alert(e.message); }
+});
+
+// Payments
+async function loadPayments(){
+  const season = document.querySelector('#seasonInput').value.trim();
+  const players = await j('/api/players');
+  const paid = await j(`/api/payments/for-season?season=${encodeURIComponent(season)}`);
+  const paidSet = new Set(paid.map(p=>p.player_id));
+  const wrap = document.querySelector('#paymentsList');
+  wrap.innerHTML = players.map(pl=>{
+    const checked = paidSet.has(pl.id) ? 'checked' : '';
+    return `
+      <label class="row">
+        <input data-player="${pl.id}" type="checkbox" ${checked}/> ${pl.name}
+      </label>`;
+  }).join('') || '<p>No players found.</p>';
+
+  wrap.querySelectorAll('input[type=checkbox]').forEach(cb=>{
+    cb.addEventListener('change', async (e)=>{
+      if(!needToken()){ e.target.checked = !e.target.checked; return; }
+      const player_id = e.target.getAttribute('data-player')?.trim();
+      const season = document.querySelector('#seasonInput').value.trim();
+      if (!player_id || player_id === 'NaN') { console.warn('Skip toggle: invalid player_id', player_id); return; }
+      const wantPaid = e.target.checked;
+      try{
+        await j(`/api/admin/payments/${encodeURIComponent(player_id)}`, {
+          method:'PATCH', headers:hdrs(), body:JSON.stringify({ paid: wantPaid, season })
+        });
+      }catch(err){
+        alert(err.message);
+        e.target.checked = !wantPaid;
+      }
+    });
+  });
+}
+document.querySelector('#loadPaymentsBtn').addEventListener('click', loadPayments);
+
+// Player Management
+async function renderPlayers(){
+  const players = await j('/api/players');
+  const wrap = document.querySelector('#playersList');
+  wrap.innerHTML = players.map(p=>{
+    return `
+      <div class="row" data-id="${p.id}">
+        <div style="flex:1">${p.name}</div>
+        <button class="btn danger del">Remove</button>
+      </div>`;
+  }).join('') || '<p>No players yet.</p>';
+
+  wrap.querySelectorAll('.del').forEach(btn=>{
+    btn.addEventListener('click', async (e)=>{
+      if(!needToken()) return;
+      const row = e.target.closest('.row');
+      const id = row?.dataset?.id?.trim();
+      if (!id || id === 'NaN') { console.warn('Skip delete: invalid player id', id); return; }
+      if(!confirm('Remove player?')) return;
+      try{
+        await j('/api/players', { method:'DELETE', headers:hdrs(), body:JSON.stringify({ id }) });
+        row.remove();
+      }catch(err){ alert(err.message); }
+    });
+  });
+}
+document.querySelector('#addPlayerBtn').addEventListener('click', async ()=>{
+  if(!needToken()) return;
+  const name = document.querySelector('#newPlayerName').value.trim();
+  if(!name) return;
+  try{
+    await j('/api/players', { method:'POST', headers:hdrs(), body:JSON.stringify({ name }) });
+    document.querySelector('#newPlayerName').value = '';
+    await renderPlayers();
+    const paymentsOpen = document.querySelector('#paymentsList').children.length > 0;
+    if (paymentsOpen) await loadPayments();
+  }catch(e){ alert(e.message); }
+});
+
+// Top of page
+document.querySelector('#toTopBtn').addEventListener('click', ()=>{
+  window.scrollTo({ top:0, behavior:'smooth' });
+});
+
+// Initial loads
+(async function init(){
+  try{ await renderPlayers(); }catch(e){}
+})();
+</script>
+<!-- Audit Log (embedded) -->
+<section id="audit-log" style="margin:24px 0; background:#fff; border-radius:16px; box-shadow:0 6px 24px rgba(0,0,0,0.06); overflow:hidden;">
+  <div style="display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid #e5e7eb;">
+    <div style="display:flex; align-items:center;">
+      <div style="width:6px; height:24px; background:#2563eb; border-radius:4px; margin-right:10px;"></div>
+      <div>
+        <div style="font-weight:600; color:#1d4ed8;">Audit Log</div>
+        <div style="color:#64748b; font-size:12px;">Who changed fixtures, results, predictions (with diffs).</div>
+      </div>
+    </div>
+    <a href="/admin.html" target="_blank" style="background:#2563eb; color:#fff; padding:8px 12px; border-radius:12px; text-decoration:none;">Open in new tab</a>
+  </div>
+  <iframe src="/admin.html" style="width:100%; height:80vh; border:0; display:block;"></iframe>
+</section>
+<!-- Audit Log (embedded) -->
+<section id="audit-log" style="margin:24px 0; background:#fff; border-radius:16px; box-shadow:0 6px 24px rgba(0,0,0,0.06); overflow:hidden;">
+  <div style="display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid #e5e7eb;">
+    <div style="display:flex; align-items:center;">
+      <div style="width:6px; height:24px; background:#2563eb; border-radius:4px; margin-right:10px;"></div>
+      <div>
+        <div style="font-weight:600; color:#1d4ed8;">Audit Log</div>
+        <div style="color:#64748b; font-size:12px;">Who changed fixtures, results, predictions (with diffs).</div>
+      </div>
+    </div>
+    <a href="/admin.html" target="_blank" style="background:#2563eb; color:#fff; padding:8px 12px; border-radius:12px; text-decoration:none;">Open in new tab</a>
+  </div>
+  <iframe src="/admin.html" style="width:100%; height:80vh; border:0; display:block;"></iframe>
+</section>
+</body>
+</html>
+
+
+
+

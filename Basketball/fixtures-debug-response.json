@@ -1,0 +1,45 @@
+﻿{
+    "ok":  true,
+    "tenant":  "EPL-2025",
+    "dataDir":  "data\\tenants\\EPL-2025",
+    "season":  2025,
+    "week":  1,
+    "candidates":  [
+                       {
+                           "path":  "data\\tenants\\EPL-2025\\fixtures\\season-2025\\week-1.json",
+                           "exists":  true,
+                           "size":  227
+                       },
+                       {
+                           "path":  "data\\tenants\\EPL-2025\\fixtures\\season-2025\\weeks\\week-1.json",
+                           "exists":  false,
+                           "size":  0
+                       },
+                       {
+                           "path":  "data\\tenants\\EPL-2025\\fixtures\\week-1.json",
+                           "exists":  false,
+                           "size":  0
+                       },
+                       {
+                           "path":  "data\\fixtures\\season-2025\\week-1.json",
+                           "exists":  false,
+                           "size":  0
+                       },
+                       {
+                           "path":  "data\\fixtures\\season-2025\\weeks\\week-1.json",
+                           "exists":  false,
+                           "size":  0
+                       },
+                       {
+                           "path":  "data\\fixtures\\week-1.json",
+                           "exists":  false,
+                           "size":  0
+                       }
+                   ],
+    "foundFile":  null,
+    "count":  0,
+    "sample":  [
+
+               ],
+    "sampleKeysIfUnparsed":  null
+}

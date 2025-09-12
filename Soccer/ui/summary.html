@@ -1,0 +1,89 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+  <title>MatchM8 – Submit Predictions</title>
+  
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <h2>Submit Your Predictions – Week <span id="week-number"></span></h2>
+  <table class="table" id="fixture-table">
+    <thead>
+      <tr>
+        <th>Match</th>
+        <th>Your Prediction</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+  <button class="btn" onclick="savePredictions()">Save Picks</button>
+  <div class="banner" id="banner">✅ Picks saved! Check your email for confirmation.</div>
+
+  <script>
+    const week = new URLSearchParams(window.location.search).get('week') || 1;
+    document.getElementById('week-number').textContent = week;
+
+    let playerId = localStorage.getItem('player_id');
+    if (!playerId) {
+      alert("No player session found. Please log in.");
+      location.href = "login.html";
+    }
+
+    let fixtureList = [];
+
+    fetch(`/api/fixtures?week=${week}`)
+      .then(res => res.json())
+      .then(data => {
+        fixtureList = data.fixtures;
+        const tbody = document.querySelector("tbody");
+        fixtureList.forEach(fixture => {
+          const row = document.createElement("tr");
+          row.innerHTML = `
+            <td>${fixture.home} vs ${fixture.away}</td>
+            <td>
+              <input type="number" min="0" max="20" id="home_${fixture.id}" placeholder="HG" />
+              <span>–</span>
+              <input type="number" min="0" max="20" id="away_${fixture.id}" placeholder="AG" />
+            </td>
+          `;
+          tbody.appendChild(row);
+        });
+      });
+
+    function savePredictions() {
+      const predictions = [];
+
+      fixtureList.forEach(fixture => {
+        const homeInput = document.getElementById(`home_${fixture.id}`);
+        const awayInput = document.getElementById(`away_${fixture.id}`);
+        const hg = homeInput?.value;
+        const ag = awayInput?.value;
+
+        if (hg !== "" && ag !== "") {
+          predictions.push({
+            fixture_id: fixture.id,
+            home_goals: parseInt(hg),
+            away_goals: parseInt(ag)
+          });
+        }
+      });
+
+      fetch(`/api/predictions?week=${week}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ player_id: playerId, predictions })
+      }).then(res => {
+        if (res.ok) {
+          document.getElementById("banner").style.display = "block";
+        } else {
+          alert("Error saving predictions.");
+        }
+      });
+    }
+  </script>
+  <script src="/js/tenant.js"></script>
+</body>
+</html>
+
+
+
