@@ -1,0 +1,123 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <link rel="icon" href="/favicon.ico">
+  <meta charset="utf-8" />
+  <title>Finalize Week — Scoring</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="wrap">
+    <h1>Finalize Week — Scoring</h1>
+
+    <div id="msgOk" class="ok"></div>
+    <div id="msgErr" class="err"></div>
+
+    <div class="card">
+      <div class="row">
+        <label>Week <input id="week" type="number" min="1" value="1" /></label>
+        <label><input id="overwrite" type="checkbox" /> Overwrite if already scored</label>
+        <button id="btnCalc" class="primary">Calculate &amp; Save</button>
+        <button class="btn primary" id="btnPreview">Preview</button>
+        <a id="lnkPreds" href="/data/predictions/week-1.json" target="_blank">Open Predictions</a>
+      </div>
+      <div id="summary" class="muted" style="margin-top:10px;">—</div>
+
+      <div id="scoresWrap" style="display:none;">
+        <table class="table">
+          <thead><tr><th>#</th><th>Player</th><th class="r">Points</th></tr></thead>
+          <tbody id="scoresBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ---------- helpers ----------
+    const $ = s => document.querySelector(s);
+    const msgOk = $('#msgOk'), msgErr = $('#msgErr');
+    const weekInput = $('#week'), overwrite = $('#overwrite');
+    const summary = $('#summary'), scoresWrap = $('#scoresWrap'), scoresBody = $('#scoresBody'), lnkPreds = $('#lnkPreds');
+
+    function showOk(t){ msgErr.style.display='none'; msgOk.textContent=t; msgOk.style.display='block'; }
+    function showErr(t){ msgOk.style.display='none'; msgErr.textContent=t; msgErr.style.display='block'; }
+    function clearMsgs(){ msgOk.style.display='none'; msgErr.style.display='none'; }
+
+    function getWeek(){ return Number(weekInput.value || 1); }
+    function updateLinks(){ lnkPreds.href = `/data/predictions/week-${getWeek()}.json`; }
+
+    async function apiJSON(url, opts = {}) {
+      const res = await fetch(url, Object.assign({ headers:{'Content-Type':'application/json'} }, opts));
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      return res.json();
+    }
+
+    function renderSummary(data){
+      // supports either our new fields or aliases
+      const ft = data.fixturesWithFT ?? data.fixtures_with_ft ?? data.fixturesFT ?? data.fixtures_done ?? data.fixturesCompleted;
+      const total = data.totalFixtures ?? data.fixtures_total ?? data.total_fixtures ?? data.fixturesCount;
+      const ts = data.timestamp || new Date().toISOString();
+      summary.textContent = `Fixtures with FT: ${ft}/${total} — timestamp: ${ts}`;
+    }
+    function renderScores(list){
+      scoresBody.innerHTML = '';
+      if (!Array.isArray(list) || !list.length) {
+        scoresWrap.style.display = 'none';
+        return;
+      }
+      let rank = 0, lastPts = null;
+      list.forEach((row, i) => {
+        if (row.points !== lastPts) { rank = i + 1; lastPts = row.points; }
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${rank}</td><td>${row.name || row.player_id}</td><td class="r">${row.points}</td>`;
+        scoresBody.appendChild(tr);
+      });
+      scoresWrap.style.display = 'block';
+    }
+
+    async function preview(){
+      clearMsgs();
+      try {
+        const w = getWeek();
+        const data = await apiJSON(`/api/scores/summary?week=${w}`);
+        renderSummary(data);
+        renderScores(data.scores);
+        showOk(`Preview ready for week ${w}`);
+      } catch (e) { showErr('Preview failed: ' + e.message); }
+    }
+
+    async function calcAndSave(){
+      clearMsgs();
+      try {
+        const w = getWeek();
+        const data = await apiJSON('/api/scores/calc', {
+          method: 'POST',
+          body: JSON.stringify({ week: w, overwrite: overwrite.checked })
+        });
+        renderSummary(data);
+        renderScores(data.scores);
+        showOk(`✅ Saved week ${w}. Season totals updated.`);
+      } catch (e) { showErr('Save failed: ' + e.message); }
+    }
+
+    // ---------- wire ----------
+    $('#btnPreview').addEventListener('click', preview);
+    $('#btnCalc').addEventListener('click', calcAndSave);
+    weekInput.addEventListener('change', updateLinks);
+
+    // init
+    (function init(){
+      const params = new URLSearchParams(location.search);
+      const w = Number(params.get('week') || 1);
+      weekInput.value = w;
+      updateLinks();
+      // auto preview on open
+      preview().catch(()=>{});
+    })();
+  </script>
+</body>
+</html>
+
+

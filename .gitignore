@@ -1,21 +1,11 @@
-﻿node_modules/
-.env
-
-# local junk
-.vscode/
-.tmp/
-*.log
-
-# backups & diagnostics
-backups/
-_diag_bundle/
-*.zip
-
-# runtime data (persisted on disk, not tracked)
-# keep a README so the folder exists in the repo
-/data/*
-!/data/README.md
-
-
+node_modules/
+_backup/
 _clean/
+_diag_bundle/
+Soccer/data/
+Basketball/data/
+Soccer/node_modules/
+Basketball/node_modules/
+*.log
 *.zip
+.env

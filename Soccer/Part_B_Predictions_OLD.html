@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>MatchM8 — Part B: Predictions</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link href="/css/styles.css" rel="stylesheet" />
+
+  <style>
+    /* Minimal safe CSS including the 5th column for FT badge */
+    .fixtures { width: 100%; max-width: 900px; margin: 24px auto; }
+    .row { display: grid; grid-template-columns: 2fr 2fr 80px 80px 70px; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid #eee; }
+    .row.header { font-weight: 600; border-bottom: 2px solid #ddd; }
+    .ft-badge { font-size: 12px; border: 1px solid #ccc; border-radius: 4px; padding: 2px 6px; text-align: center; }
+    .actions { margin: 24px auto; width: 100%; max-width: 900px; display: flex; gap: 12px; }
+    .hidden { display: none; }
+    input.score { width: 70px; padding: 6px; text-align: center; }
+    #msg { max-width:900px; margin: 12px auto; color: #e11d48; }
+    
+  </style>
+</head>
+<body>
+  <div class="fixtures" id="fixtures">
+    <div class="row header">
+      <div>Home</div>
+      <div>Away</div>
+      <div>Your Home</div>
+      <div>Your Away</div>
+      <div>FT</div>
+    </div>
+    <!-- rows appended by JS -->
+  </div>
+
+  <div class="actions">
+    <button id="saveBtn">Save Predictions</button>
+    <span id="saveStatus" class="hidden">Saved ✔</span>
+  </div>
+
+  <div id="msg"></div>
+
+  <!-- IMPORTANT: load hardener BEFORE your predictions logic -->
+  <script src="/js/predictions_url_hardener.js"></script>
+  <script src="/js/predictions_flow.js" defer></script>
+</body>
+</html>
