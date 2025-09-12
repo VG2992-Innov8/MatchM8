@@ -1,0 +1,7 @@
+{"scripts": {
+  "start": "node index.js",
+  "dev": "nodemon --watch . --ext js,json,html --exec node index.js"
+}
+
+
+

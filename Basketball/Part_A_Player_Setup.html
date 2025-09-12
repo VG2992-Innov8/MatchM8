@@ -1,0 +1,78 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>MatchM8 — Part A (Player Setup)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body{font-family:system-ui,Arial,sans-serif;margin:24px;max-width:560px}
+    h1{margin-top:0}
+    label{display:block;margin:12px 0 6px}
+    input{width:100%;padding:10px;font-size:16px}
+    button{margin-top:16px;padding:10px 14px;font-size:16px}
+    .err{color:#b00020;margin-top:8px;min-height:1.25em}
+    .muted{color:#666;font-size:12px}
+  </style>
+</head>
+<body>
+  <h1>MatchM8</h1>
+  <p class="muted">Enter your details to continue.</p>
+
+  <label for="inputName">Name</label>
+  <input id="inputName" placeholder="e.g. Vince" autocomplete="name" />
+
+  <!-- Optional “league / group code” field (stored locally, not sent to verify) -->
+  <label for="inputLeague">League Code (optional)</label>
+  <input id="inputLeague" placeholder="e.g. 3" />
+
+  <label for="inputPin">PIN</label>
+  <input id="inputPin" placeholder="e.g. 1111" inputmode="numeric" />
+
+  <label for="inputWeek">Week (optional)</label>
+  <input id="inputWeek" type="number" min="1" step="1" value="1" />
+
+  <button id="continueBtn">Continue</button>
+  <div id="errorMsg" class="err"></div>
+
+  <script>
+    const $ = s => document.querySelector(s);
+    const err = $("#errorMsg");
+
+    $("#continueBtn").addEventListener("click", async () => {
+      err.textContent = "";
+      const name   = ($("#inputName").value || "").trim();
+      const pin    = ($("#inputPin").value || "").trim();
+      const league = ($("#inputLeague").value || "").trim();
+      const week   = ($("#inputWeek").value || "1").trim() || "1";
+
+      if (!name || !pin) {
+        err.textContent = "Please enter name and PIN.";
+        return;
+      }
+
+      try {
+        const res = await fetch("/api/auth/pin/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, pin }) // IMPORTANT: only name+pin
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          err.textContent = data.error || "Invalid name or PIN";
+          return;
+        }
+
+        // Store for Part B
+        localStorage.setItem("mm_player", name);
+        localStorage.setItem("mm_pin", pin);
+        if (league) localStorage.setItem("mm_league", league);
+
+        // Go to Part B (served from /public)
+        window.location.href = `/Part_B_Predictions.html?week=${encodeURIComponent(week)}`;
+      } catch (e) {
+        err.textContent = e.message || "Something went wrong.";
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+  <title>Predictions</title>
+    <script src="/predictions.js" defer></script>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Enter Your Predictions</h1>
+
+        <label for="playerSelect">Select Player:</label>
+        <select id="playerSelect">
+            <option value="">-- Select Player --</option>
+        </select>
+
+        <div id="pinPrompt" style="display: none;">
+            <label for="playerPin">Enter PIN:</label>
+            <input type="password" id="playerPin" maxlength="6">
+            <button class="btn" id="verifyPin">Verify PIN</button>
+        </div>
+
+        <div id="predictionsForm" style="display: none;">
+            <div id="matchesContainer"></div>
+            <button class="btn" id="savePredictions">Save Predictions</button>
+        </div>
+
+        <p id="statusMessage"></p>
+    </div>
+  <script src="/js/tenant.js"></script>
+</body>
+</html>
+
+
+

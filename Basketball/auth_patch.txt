@@ -1,0 +1,27 @@
+// PATCH for backend routes/auth.js
+
+router.post('/pin/verify', async (req, res) => {
+  const { nameOrEmail, pin } = req.body;
+  if (!nameOrEmail || !pin) {
+    return res.status(400).json({ error: 'Missing nameOrEmail or pin' });
+  }
+
+  try {
+    const data = await fs.readFile(path.join(DATA_DIR, 'players.json'), 'utf8');
+    const players = JSON.parse(data);
+
+    const matchedPlayer = players.find(p =>
+      (p.name.toLowerCase() === nameOrEmail.toLowerCase() || p.email?.toLowerCase() === nameOrEmail.toLowerCase()) &&
+      p.pin === pin
+    );
+
+    if (matchedPlayer) {
+      res.json({ ok: true, player_id: matchedPlayer.id, name: matchedPlayer.name });
+    } else {
+      res.status(401).json({ error: 'Invalid credentials' });
+    }
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to verify PIN' });
+  }
+});

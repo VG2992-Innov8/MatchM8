@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MatchM8 — Part C (Admin Panel)</title>
+  <link rel="stylesheet" href="/style.css?v=8" />
+</head>
+<body>
+  <!-- Hero + Tabs -->
+  <div class="hero">
+    <div class="container">
+      <h1 class="site-title">MatchM8 <span class="subtitle">— Soccer Prediction Game</span></h1>
+    </div>
+  </div>
+  <header class="header">
+    <div class="container nav">
+      <a href="index.html">Home</a>
+      <a href="Part_A_Player_Setup.html">Part A</a>
+      <a href="Part_B_Predictions.html">Part B</a>
+      <a class="active" href="Part_C_Admin_Panel.html">Part C</a>
+      <a href="Part_D_Scoring_System.html">Part D</a>
+      <a href="admin_tools.html">Admin Tools</a>
+    </div>
+  </header>
+
+<div class="container">
+  <h2>Admin — Results</h2>
+  <div class="card">
+    <p>
+      <label>Week:
+        <select id="weekSel">
+          <option>1</option><option>2</option><option>3</option><option>4</option><option>5</option>
+          <option>6</option><option>7</option><option>8</option><option>9</option><option>10</option>
+        </select>
+      </label>
+      <span id="msg" class="muted" style="margin-left:8px;"></span>
+    </p>
+
+    <form id="resForm"></form>
+    <p style="margin-top:12px;">
+      <button class="btn" id="saveBtn" type="button">Save Results</button>
+    </p>
+  </div>
+</div>
+
+<script>
+function getWeek(){ const u=new URL(location.href); const w=parseInt(u.searchParams.get('week')||'1',10); return Number.isFinite(w)?w:1; }
+function setWeek(w){ const u=new URL(location.href); u.searchParams.set('week', w); location.href=u.toString(); }
+
+const WEEK = getWeek();
+const $  = s => document.querySelector(s);
+const say= (t,cls='') => { const m=$('#msg'); m.className='muted '+cls; m.textContent=t; setTimeout(()=>m.textContent='',1500); };
+
+let matches = [];
+
+async function getJSON(path){ const r=await fetch(path); const t=await r.text(); try{ return { ok:r.ok, status:r.status, json: JSON.parse(t) } }catch{ return { ok:r.ok, status:r.status, text:t } } }
+
+async function loadMatches(){
+  const {ok,status,json,text} = await getJSON(`/api/matches?week=${WEEK}`);
+  if(!ok){ console.error('GET /api/matches ->', status, text||''); say('Load failed','err'); return; }
+  matches = json || [];
+  buildForm();
+}
+
+function buildForm(){
+  const form = $('#resForm'); form.innerHTML='';
+  matches.forEach(m=>{
+    const hg = m.results?.home_goals ?? '';
+    const ag = m.results?.away_goals ?? '';
+    const row = document.createElement('div');
+    row.style.margin='8px 0';
+    row.innerHTML = `
+      <label>Match ${m.match_no} — ${m.home} vs ${m.away}:
+        <input data-mid="${m.id}" data-part="home" value="${hg}" placeholder="home" style="width:70px;margin-left:8px"> -
+        <input data-mid="${m.id}" data-part="away" value="${ag}" placeholder="away" style="width:70px">
+      </label>`;
+    form.appendChild(row);
+  });
+}
+
+async function saveResults(){
+  const homes = [...document.querySelectorAll('input[data-part="home"]')];
+  const aways = [...document.querySelectorAll('input[data-part="away"]')];
+
+  for(let i=0;i<matches.length;i++){
+    const match_id = matches[i].id;
+    const h = parseInt(homes[i].value,10);
+    const a = parseInt(aways[i].value,10);
+    if(!Number.isFinite(h) || !Number.isFinite(a)) continue;
+
+    const res = await fetch('/api/results', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ match_id, home_goals:h, away_goals:a })
+    });
+    if(!res.ok){
+      console.error('POST /api/results ->', res.status, await res.text());
+      say('Some saves failed','err');
+      return;
+    }
+  }
+  await loadMatches();
+  say('Saved ✔','ok');
+}
+
+async function init(){
+  $('#weekSel').value = String(WEEK);
+  $('#weekSel').onchange = e => setWeek(e.target.value);
+
+  await loadMatches();
+  $('#saveBtn').onclick = saveResults;
+}
+window.addEventListener('DOMContentLoaded', init);
+</script>
+<script src="/nav-active.js"></script>
+</body>
+</html>

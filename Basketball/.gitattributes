@@ -1,0 +1,3 @@
+* text=auto
+*.{js,css,html,json} text eol=lf
+*.{png,jpg,jpeg,zip,ico,svg,woff,woff2} binary
