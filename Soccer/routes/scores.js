@@ -1,4 +1,5 @@
-// routes/scores.js — tenant+competition-aware *Basketball* scorer (supports old & new prediction shapes)
+// routes/scores.js — tenant+competition-aware scorer with opt-in Basketball rules
+// Default (no rules.json): Soccer scoring (3 exact, 1 outcome)
 
 const express = require('express');
 const path = require('path');
@@ -58,6 +59,7 @@ function SCO_DIR(req)  { return joinData(req, 'scores'); }
 function SCO_WEEKS(req){ return path.join(SCO_DIR(req), 'weeks'); }
 function PLAYERS(req)  { return joinData(req, 'players.json'); }
 function CFG_PATH(req) { return joinData(req, 'config.json'); }
+function RULES_PATH(req){ return path.join(SCO_DIR(req), 'rules.json'); }
 
 // legacy (read-only) fallbacks at TENANT ROOT (not competition)
 function LEGACY_PRED_DIR(req) { return path.join(tenantRoot(req), 'predictions'); }
@@ -133,7 +135,7 @@ function normalisePredictions(data) {
   return map;
 }
 
-// Basketball fixtures: accept many shapes; capture spread & total lines if present
+// Basketball/Soccer fixtures: accept many shapes; capture spread & total lines if present
 function normaliseFixtures(any) {
   const out = new Map();
   const norm = (m, idKey) => {
@@ -168,9 +170,29 @@ function normaliseFixtures(any) {
   return out;
 }
 
-/* ---------------- Basketball scoring ---------------- */
+/* ---------------- Scoring rules & engines ---------------- */
 
-// +2 correct winner, +1 correct spread side, +1 correct total side, +2 exact score bonus (push = 0)
+// Read optional per-competition rules (e.g., Basketball)
+function readRules(req) {
+  return readJson(RULES_PATH(req), null);
+}
+
+// Default SOCCER scoring: 3 for exact score, 1 for correct outcome (win/draw/loss)
+function computeSoccerPoints(pred, actual) {
+  if (!actual) return 0;
+  const ph = toIntOrNull(pred.exact_home ?? pred.home);
+  const pa = toIntOrNull(pred.exact_away ?? pred.away);
+  if (!Number.isInteger(ph) || !Number.isInteger(pa)) return 0;
+
+  const ah = actual.home, aa = actual.away;
+  if (ph === ah && pa === aa) return 3;
+
+  const predOutcome = ph === pa ? 'D' : (ph > pa ? 'H' : 'A');
+  const realOutcome = ah === aa ? 'D' : (ah > aa ? 'H' : 'A');
+  return predOutcome === realOutcome ? 1 : 0;
+}
+
+// Basketball basic: +2 correct winner, +1 spread side, +1 total side, +2 exact (push = 0)
 function computeBasketballPoints(pred, actual, fx) {
   if (!actual) return 0;
   let pts = 0;
@@ -212,6 +234,14 @@ function computeBasketballPoints(pred, actual, fx) {
   return pts;
 }
 
+// Select scorer based on rules.json (default to Soccer)
+function getScorer(rules) {
+  if (rules && rules.mode === 'basketball_basic') {
+    return (p, a, fx) => computeBasketballPoints(p, a, fx);
+  }
+  return (p, a, fx) => computeSoccerPoints(p, a, fx);
+}
+
 /* ---------------- Fixtures helpers ---------------- */
 
 function readConfig(req) {
@@ -234,14 +264,15 @@ function readFixturesForWeek(req, week) {
 
 /* ---------------- Compute helpers ---------------- */
 
-function computeWeekTable(week, predMap, results, playersIndex, fixturesMap) {
+function computeWeekTable(week, predMap, results, playersIndex, fixturesMap, rules) {
+  const scoreFn = getScorer(rules);
   const table = []; // [{player_id, name, week_points}]
   for (const [pid, arr] of predMap.entries()) {
     let pts = 0;
     for (const p of arr) {
       const actual = results[p.id];
       const fx = fixturesMap.get(p.id) || null;
-      pts += computeBasketballPoints(p, actual, fx);
+      pts += scoreFn(p, actual, fx);
     }
     table.push({
       player_id: pid,
@@ -329,6 +360,7 @@ function computeAndPersist(req, week) {
   const resultsRaw = readJson(path.join(RES_DIR(req),  `week-${week}.json`), null)
                    ?? readJson(path.join(LEGACY_RES_DIR(req),  `week-${week}.json`), null);
   const fixtures   = readFixturesForWeek(req, week);
+  const rules      = readRules(req);
 
   const predMap  = normalisePredictions(predsRaw);
   const results  = normaliseResults(resultsRaw);
@@ -336,7 +368,7 @@ function computeAndPersist(req, week) {
   const playersArr = readJson(PLAYERS(req), []);
   const playersIdx = new Map(playersArr.map(p => [String(p.id), { name: p.name || '' }]));
 
-  const weekTable = computeWeekTable(week, predMap, results, playersIdx, fixtures);
+  const weekTable = computeWeekTable(week, predMap, results, playersIdx, fixtures, rules);
 
   // Persist weekly scores (competition-scoped + legacy alias in comp folder)
   const weeklyOut = weekTable.map(r => ({
@@ -394,6 +426,7 @@ router.get('/', (req, res) => {
   const resultsRaw = readJson(path.join(RES_DIR(req),  `week-${week}.json`), null)
                    ?? readJson(path.join(LEGACY_RES_DIR(req),  `week-${week}.json`), null);
   const fixtures   = readFixturesForWeek(req, week);
+  const rules      = readRules(req);
 
   const predMap  = normalisePredictions(predsRaw);
   const results  = normaliseResults(resultsRaw);
@@ -401,7 +434,7 @@ router.get('/', (req, res) => {
   const playersArr = readJson(PLAYERS(req), []);
   const playersIdx = new Map(playersArr.map(p => [String(p.id), { name: p.name || '' }]));
 
-  const table = computeWeekTable(week, predMap, results, playersIdx, fixtures);
+  const table = computeWeekTable(week, predMap, results, playersIdx, fixtures, rules);
 
   return res.json({
     ok: true,
@@ -446,12 +479,13 @@ router.get('/week', (req, res) => {
     const resultsRaw = readJson(path.join(RES_DIR(req),  `week-${week}.json`), null)
                      ?? readJson(path.join(LEGACY_RES_DIR(req),  `week-${week}.json`), null);
     const fixtures   = readFixturesForWeek(req, week);
+    const rules      = readRules(req);
 
     const predMap    = normalisePredictions(predsRaw);
     const results    = normaliseResults(resultsRaw);
     const playersArr = readJson(PLAYERS(req), []);
     const playersIdx = new Map(playersArr.map(p => [String(p.id), { name: p.name || '' }]));
-    const table      = computeWeekTable(week, predMap, results, playersIdx, fixtures);
+    const table      = computeWeekTable(week, predMap, results, playersIdx, fixtures, rules);
     weekly = table.map(r => ({ player_id: r.player_id, player: r.name, weekPoints: r.week_points }));
     saved = false;
   }
@@ -488,12 +522,13 @@ router.get('/summary', (req, res) => {
         const resultsRaw = readJson(path.join(RES_DIR(req),  `week-${week}.json`), null)
                          ?? readJson(path.join(LEGACY_RES_DIR(req),  `week-${week}.json`), null);
         const fixtures   = readFixturesForWeek(req, week);
+        const rules      = readRules(req);
 
         const predMap    = normalisePredictions(predsRaw);
         const results    = normaliseResults(resultsRaw);
         const playersArr = readJson(PLAYERS(req), []);
         const playersIdx = new Map(playersArr.map(p => [String(p.id), { name: p.name || '' }]));
-        const table      = computeWeekTable(week, predMap, results, playersIdx, fixtures);
+        const table      = computeWeekTable(week, predMap, results, playersIdx, fixtures, rules);
         weekly = table.map(r => ({ player_id: r.player_id, player: r.name, weekPoints: r.week_points }));
       }
     }
@@ -512,7 +547,7 @@ router.get('/summary', (req, res) => {
   }
 });
 
-// ---- Player week breakdown: predictions + results + per-match points (basketball)
+// ---- Player week breakdown: predictions + results + per-match points (basketball/soccer)
 
 function findPlayerByName(playersArr, name) {
   if (!name) return null;
@@ -536,6 +571,8 @@ router.get('/player-week', (req, res) => {
   if (!playerId) return res.status(400).json({ ok: false, error: 'player_id or name required' });
 
   const fixtures = readFixturesForWeek(req, week);
+  const rules    = readRules(req);
+  const scoreFn  = getScorer(rules);
 
   const predsRaw   = readJson(path.join(PRED_DIR(req), `week-${week}.json`), null)
                    ?? readJson(path.join(LEGACY_PRED_DIR(req), `week-${week}.json`), null);
@@ -561,18 +598,31 @@ router.get('/player-week', (req, res) => {
 
     let pts = null;
     if (actual && pred) {
-      pts = computeBasketballPoints(pred, actual, fx);
+      pts = scoreFn(pred, actual, fx);
       weekPoints += pts;
 
-      // Tally details
+      // Tally details (works for both soccer & basketball)
       const gaveExact = Number.isInteger(pred.exact_home) && Number.isInteger(pred.exact_away);
-      if (gaveExact && pred.exact_home === actual.home && pred.exact_away === actual.away) {
+      if (gaveExact && actual && pred.exact_home === actual.home && pred.exact_away === actual.away) {
         exactCount++;
-      } else if (pred.winner) {
-        const homeWon = actual.home > actual.away;
-        if ((pred.winner === 'HOME' && homeWon) || (pred.winner === 'AWAY' && !homeWon)) {
-          outcomeCount++;
+      } else if (actual) {
+        // Outcome: soccer via numeric outcome; basketball via winner pick
+        let outcomeOk = false;
+        if (rules && rules.mode === 'basketball_basic') {
+          if (pred.winner) {
+            const homeWon = actual.home > actual.away;
+            outcomeOk = (pred.winner === 'HOME' && homeWon) || (pred.winner === 'AWAY' && !homeWon);
+          }
+        } else {
+          const ph = toIntOrNull(pred.exact_home ?? pred.home);
+          const pa = toIntOrNull(pred.exact_away ?? pred.away);
+          if (Number.isInteger(ph) && Number.isInteger(pa)) {
+            const predOutcome = ph === pa ? 'D' : (ph > pa ? 'H' : 'A');
+            const realOutcome = actual.home === actual.away ? 'D' : (actual.home > actual.away ? 'H' : 'A');
+            outcomeOk = predOutcome === realOutcome && !(ph === actual.home && pa === actual.away);
+          }
         }
+        if (outcomeOk) outcomeCount++;
       }
     } else if (!actual) {
       pendingCount++;
