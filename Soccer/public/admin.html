@@ -2,95 +2,141 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+  />
   <title>MatchM8 – Admin</title>
-  
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css" />
 </head>
-<!-- Competition picker + sticky tenant/comp params -->
-<div style="margin:16px 0;padding:12px;border:1px solid #ddd;border-radius:12px">
-  <label style="font-weight:600">Competition (optional)</label>
-  <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
-    <input id="compSlug" placeholder="e.g. EPL-2025 or A-LEAGUE-2025" style="flex:1;padding:8px;border:1px solid #ccc;border-radius:8px">
-    <button id="useComp" style="padding:8px 12px;border-radius:8px;border:1px solid #333;background:#333;color:#fff">Use Comp</button>
-    <small id="compHint" style="opacity:.75">Leave blank to use server default (EPL-2025).</small>
-  </div>
-</div>
-
-<script>
-(() => {
-  const u = new URL(location.href);
-  const t = u.searchParams.get('t') || '';      // tenant from URL
-  const savedC = localStorage.getItem('comp');  // last chosen competition
-
-  // If user has a saved comp and URL lacks ?c, add it once
-  if (!u.searchParams.has('c') && savedC) {
-    u.searchParams.set('c', savedC);
-    location.replace(u.pathname + '?' + u.searchParams.toString());
-    return;
-  }
-
-  // Make all internal links carry ?t and ?c
-  function stickLinks() {
-    const urlNow = new URL(location.href);
-    const c = urlNow.searchParams.get('c') || '';
-    document.querySelectorAll('a[href^="/"]').forEach(a => {
-      const url = new URL(a.getAttribute('href'), location.origin);
-      if (t && !url.searchParams.get('t')) url.searchParams.set('t', t);
-      if (c && !url.searchParams.get('c')) url.searchParams.set('c', c);
-      a.setAttribute('href', url.pathname + '?' + url.searchParams.toString());
-    });
-  }
-  stickLinks();
-
-  // Wire up the Competition field
-  const input = document.getElementById('compSlug');
-  const btn   = document.getElementById('useComp');
-  if (input && btn) {
-    const currentC = (new URL(location.href)).searchParams.get('c') || savedC || '';
-    input.value = currentC;
-    btn.addEventListener('click', () => {
-      const val = (input.value || '').trim();
-      if (val) localStorage.setItem('comp', val);
-      else localStorage.removeItem('comp'); // let server default to EPL-2025
-      const nu = new URL(location.href);
-      if (val) nu.searchParams.set('c', val); else nu.searchParams.delete('c');
-      location.href = nu.pathname + '?' + nu.searchParams.toString();
-    });
-  }
-})();
-</script>
-
 <body>
-  <div class="title-bar">MatchM8 Soccer Predictions</div>
-  <div class="league-bar">English Premier League</div>
+  <!-- Dynamic header (filled from /api/tenant/meta) -->
+  <div class="title-bar" id="brandTitle">MatchM8</div>
+  <div class="league-bar" id="brandSubtitle">—</div>
   <div class="subtitle-bar">Admin Access</div>
 
+  <!-- Competition picker + sticky tenant/comp params -->
+  <div style="margin:16px 0;padding:12px;border:1px solid #ddd;border-radius:12px">
+    <label style="font-weight:600">Competition (optional)</label>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+      <input id="compSlug" placeholder="e.g. EPL-2025 or NBL-2025" style="flex:1;padding:8px;border:1px solid #ccc;border-radius:8px">
+      <button id="useComp" style="padding:8px 12px;border-radius:8px;border:1px solid #333;background:#333;color:#fff">Use Comp</button>
+      <small id="compHint" style="opacity:.75">Leave blank to use server default.</small>
+    </div>
+  </div>
+
+  <!-- Admin auth box -->
   <div class="admin-box">
     <input type="password" id="adminToken" placeholder="Enter Admin Token" />
-    <button class="btn matchm8-button primary" onclick="useToken()">Use Token</button>
+    <button class="btn matchm8-button primary" id="useTokenBtn">Use Token</button>
     <div id="confirmation" class="confirmation-message"></div>
   </div>
 
   <script>
-    function useToken() {
-      const token = document.getElementById("adminToken").value.trim();
-      if (token === "") {
-        alert("Please enter a token.");
+    (function () {
+      const url = new URL(location.href);
+      const t = url.searchParams.get('t') || '';
+      const cFromUrl = url.searchParams.get('c') || '';
+      const savedC = localStorage.getItem('comp') || '';
+
+      // If there is a saved competition and ?c is missing, add it once
+      if (!cFromUrl && savedC) {
+        url.searchParams.set('c', savedC);
+        location.replace(url.pathname + '?' + url.searchParams.toString());
         return;
       }
 
-      const week = new URLSearchParams(window.location.search).get("week") || "1";
-      localStorage.setItem("adminToken", token);
-      document.getElementById("confirmation").textContent = "Access Granted.";
-      setTimeout(() => {
-        window.location.href = `Part_C_AdminPanel.html?week=${week}`;
-      }, 1000);
-    }
+      const els = {
+        brandTitle: document.getElementById('brandTitle'),
+        brandSubtitle: document.getElementById('brandSubtitle'),
+        compInput: document.getElementById('compSlug'),
+        compBtn: document.getElementById('useComp'),
+        compHint: document.getElementById('compHint'),
+        tokenBtn: document.getElementById('useTokenBtn'),
+        confirmation: document.getElementById('confirmation'),
+      };
+
+      // Stick ?t and ?c onto all internal links
+      function stickLinks() {
+        const now = new URL(location.href);
+        const tNow = now.searchParams.get('t') || '';
+        const cNow = now.searchParams.get('c') || '';
+        document.querySelectorAll('a[href^="/"]').forEach(a => {
+          try {
+            const u = new URL(a.getAttribute('href'), location.origin);
+            if (tNow && !u.searchParams.get('t')) u.searchParams.set('t', tNow);
+            if (cNow && !u.searchParams.get('c')) u.searchParams.set('c', cNow);
+            a.setAttribute('href', u.pathname + '?' + u.searchParams.toString());
+          } catch {}
+        });
+      }
+      stickLinks();
+
+      // Fill competition input with current value (URL beats localStorage)
+      els.compInput.value = cFromUrl || savedC || '';
+
+      // Fetch tenant meta to populate header + comp hint
+      function refreshHeader() {
+        const now = new URL(location.href);
+        const tNow = now.searchParams.get('t') || '';
+        const cNow = now.searchParams.get('c') || '';
+        const metaUrl = `/api/tenant/meta?t=${encodeURIComponent(tNow)}&c=${encodeURIComponent(cNow)}`;
+        fetch(metaUrl)
+          .then(r => r.ok ? r.json() : Promise.reject(new Error('meta failed')))
+          .then(meta => {
+            const title = meta.brand_title || meta.appTitle || 'MatchM8';
+            const parts = [];
+            if (meta.brand_subtitle) parts.push(meta.brand_subtitle);
+            if (meta.competition) parts.push(meta.competition);
+            els.brandTitle.textContent = title;
+            els.brandSubtitle.textContent = parts.join(' • ') || '';
+            document.title = parts.length ? `${title} — ${parts.join(' • ')}` : title;
+
+            // Update hint to reflect the server's default competition
+            const defaultComp = meta.competition || '';
+            els.compHint.textContent = defaultComp
+              ? `Leave blank to use server default (${defaultComp}).`
+              : 'Leave blank to use server default.';
+          })
+          .catch(() => {
+            // Fallback: leave defaults; no hard failure
+          });
+      }
+      refreshHeader();
+
+      // Wire up "Use Comp" — persist and reload with ?c=
+      els.compBtn.addEventListener('click', () => {
+        const val = (els.compInput.value || '').trim();
+        if (val) localStorage.setItem('comp', val);
+        else localStorage.removeItem('comp'); // let server default
+        const nu = new URL(location.href);
+        if (val) nu.searchParams.set('c', val); else nu.searchParams.delete('c');
+        // Preserve tenant param
+        if (t && !nu.searchParams.get('t')) nu.searchParams.set('t', t);
+        location.href = nu.pathname + '?' + nu.searchParams.toString();
+      });
+
+      // Admin token handler — keep ?t and ?c in the redirect
+      els.tokenBtn.addEventListener('click', () => {
+        const token = (document.getElementById('adminToken').value || '').trim();
+        if (!token) { alert('Please enter a token.'); return; }
+        const qs = new URLSearchParams(location.search);
+        const week = qs.get('week') || '1';
+        localStorage.setItem('adminToken', token);
+        els.confirmation.textContent = 'Access Granted.';
+        setTimeout(() => {
+          // Build URL preserving t & c
+          const next = new URL('Part_C_AdminPanel.html', location.origin);
+          if (qs.get('t')) next.searchParams.set('t', qs.get('t'));
+          if (qs.get('c')) next.searchParams.set('c', qs.get('c'));
+          next.searchParams.set('week', week);
+          location.href = next.pathname + '?' + next.searchParams.toString();
+        }, 800);
+      });
+    })();
   </script>
+
+  <!-- (Optional) Your existing tenant utilities, if any -->
   <script src="/js/tenant.js"></script>
 </body>
 </html>
-
-
-
