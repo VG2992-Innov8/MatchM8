@@ -22,6 +22,7 @@
   </style>
 </head>
 <body>
+  <!-- HERO (dynamic header is injected by /public/hero.js) -->
   <div id="hero" data-page="Admin"></div>
   <script src="/hero.js" defer></script>
 
@@ -263,24 +264,20 @@
     const $ = sel => document.querySelector(sel);
     const qs = new URLSearchParams(location.search);
 
-    // >>> Tenant helper (NEW) <<<
+    // Tenant & Competition (persist + helper)
     const TENANT = qs.get('t') || localStorage.getItem('tenant') || '';
     if (TENANT) { try { localStorage.setItem('tenant', TENANT); } catch {} }
+
+    const COMP = (qs.get('c') || localStorage.getItem('comp') || '').trim();
+    if (COMP) { try { localStorage.setItem('comp', COMP); } catch {} }
+
+    // ✅ unified withScope: always append ?t= and ?c=
     function withScope(url) {
       const u = new URL(url, location.origin);
       if (TENANT) u.searchParams.set('t', TENANT);
+      if (COMP)   u.searchParams.set('c', COMP);
       return u.toString();
     }
-
-    // >>> Competition helper (NEW) <<<
-    const COMP = (new URLSearchParams(location.search).get('c') || localStorage.getItem('comp') || '').trim();
-    if (COMP) { try { localStorage.setItem('comp', COMP); } catch {} }
-    function withScope(url){
-      const u = new URL(withScope(url), location.origin);
-      if (COMP) u.searchParams.set('c', COMP);
-      return u.toString();
-    }
-
 
     const weekInput = $('#week');
     const weekTitle = $('#weekTitle');
@@ -295,12 +292,13 @@
     const HAS_WEEK_QUERY = qs.has('week');
     let CURRENT_SEASON = 2025;
 
-    // >>> fixtures now come from API (tenant-aware) <<<
+    // Fixtures URL (tenant + comp aware)
     function fixturesUrl(week){
       const u = new URL('/api/fixtures', location.origin);
       u.searchParams.set('week', String(week));
       u.searchParams.set('ts', String(Date.now()));
       if (TENANT) u.searchParams.set('t', TENANT);
+      if (COMP)   u.searchParams.set('c', COMP);
       return u.toString();
     }
 
@@ -349,9 +347,8 @@
       const headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
       const tok = getToken();
       if (tok) headers['x-admin-token'] = tok;
-      // >>> ensure tenant is always appended <<<
-      const finalUrl = withScope(url);
-      const res = await fetch(finalUrl, { ...opts, headers });
+      const finalUrl = withScope(url);     // ensure ?t & ?c travel with request
+      const res = await fetch(finalUrl, { ...opts, headers, cache: 'no-store' });
       if (!res.ok) {
         const text = await res.text().catch(() => '');
         throw new Error(`${res.status} ${res.statusText} - ${text || 'request failed'}`);
@@ -591,46 +588,6 @@
         seen.add(id);
         next.push({ id, home, away, kickoff_iso: toIso(date, time) });
       });
-
-      function collectUnsavedFixtures(){
-        // 1) Check the JSON box first
-        const raw = document.getElementById('jsonBox')?.value.trim();
-        if (raw) {
-          try {
-            const parsed = JSON.parse(raw);
-            const arr = Array.isArray(parsed) ? parsed : (parsed.fixtures || []);
-            if (Array.isArray(arr) && arr.length) {
-              return { source: 'json', fixtures: arr };
-            }
-          } catch { /* ignore bad JSON for preview */ }
-        }
-
-        // 2) Fall back to Add Fixtures table rows
-        const tbody = document.querySelector('#addFixturesTbl tbody');
-        if (tbody) {
-          const rows = Array.from(tbody.querySelectorAll('tr'));
-          const next = [];
-          const seen = new Set();
-          const toIso = (d,t)=> (d && t) ? new Date(`${d}T${t}`).toISOString() : null;
-
-          rows.forEach(tr=>{
-            const home = tr.querySelector('input[name="home"]')?.value.trim();
-            const away = tr.querySelector('input[name="away"]')?.value.trim();
-            const date = tr.querySelector('input[name="date"]')?.value;
-            const time = tr.querySelector('input[name="time"]')?.value;
-            if (!home || !away) return;
-            let base = `fixture_${slugify(home)}_${slugify(away)}`, id = base, n=1;
-            while (seen.has(id)) { n++; id = `${base}_${n}`; }
-            seen.add(id);
-            next.push({ id, home, away, kickoff_iso: toIso(date, time) });
-          });
-
-          if (next.length) return { source: 'bulk', fixtures: next };
-        }
-
-        // 3) Nothing unsaved found
-        return { source: null, fixtures: [] };
-      }
 
       const replace = document.getElementById('replaceMode')?.checked;
 
@@ -883,7 +840,7 @@
     /* ---------------- Season Settings ---------------- */
     async function loadSeason(){
       try {
-        const cfg = await fetch(withScope('/api/config')).then(r=>r.json());
+        const cfg = await fetch(withScope('/api/config'), { cache:'no-store' }).then(r=>r.json());
         // read both snake_case + camelCase for safety
         const seasonVal = Number(cfg.season ?? 2025);
         const tw = Number(cfg.total_weeks ?? cfg.totalWeeks ?? 38);
@@ -1049,7 +1006,7 @@
 
       async function refreshLicense() {
         try {
-          const r = await fetch(withScope('/api/license/status'));
+          const r = await fetch(withScope('/api/license/status'), { cache:'no-store' });
           const s = await r.json();
           if (s.ok) {
             const lic = s.license || {};
@@ -1119,7 +1076,8 @@
 
       $('#loadPlayersBtn')?.addEventListener('click', async ()=>{
         const res = await fetch(withScope('/api/admin/players'), {
-          headers: { 'x-admin-token': localStorage.getItem('admin_token') || '' }
+          headers: { 'x-admin-token': localStorage.getItem('admin_token') || '' },
+          cache: 'no-store'
         });
         const list = res.ok ? await res.json() : [];
         const withPins = list.filter(p=>p.has_pin).length;
@@ -1133,4 +1091,3 @@
   <script src="/js/tenant.js"></script>
 </body>
 </html>
-

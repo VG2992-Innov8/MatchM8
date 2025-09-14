@@ -1,4 +1,4 @@
-// routes/scores.js — tenant+competition-aware scorer (supports old & new predictions shapes)
+// routes/scores.js — tenant+competition-aware *Basketball* scorer (supports old & new prediction shapes)
 
 const express = require('express');
 const path = require('path');
@@ -27,6 +27,10 @@ function clampInt(v, min, fb) {
 }
 function safeStat(p) {
   try { return fs.statSync(p); } catch { return null; }
+}
+function toIntOrNull(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.trunc(n) : null;
 }
 
 /* ---------------- Tenant/competition roots ---------------- */
@@ -66,7 +70,8 @@ function normaliseResults(obj = {}) {
   const out = {};
   for (const [id, v] of Object.entries(obj || {})) {
     if (Array.isArray(v)) {
-      out[id] = { home: Number(v[0] ?? 0), away: Number(v[1] ?? 0) };
+      const h = toIntOrNull(v[0]); const a = toIntOrNull(v[1]);
+      if (h != null && a != null) out[id] = { home: h, away: a };
     } else if (v && typeof v === 'object') {
       const home = ('homeGoals' in v) ? v.homeGoals
                  : ('home_score' in v) ? v.home_score
@@ -76,52 +81,167 @@ function normaliseResults(obj = {}) {
                  : ('away_score' in v) ? v.away_score
                  : ('away' in v)      ? v.away
                  : null;
-      if (home != null && away != null) out[id] = { home: Number(home), away: Number(away) };
+      const h = toIntOrNull(home), a = toIntOrNull(away);
+      if (h != null && a != null) out[id] = { home: h, away: a };
     }
   }
   return out;
 }
 
 // predictions may be array rows or map keyed by player_id
+// supports basketball fields: winner ('HOME'|'AWAY'), spread_pick ('HOME'|'AWAY'), total_pick ('OVER'|'UNDER'),
+// exact_home/exact_away (ints). Falls back to {home,away} numeric predictions.
 function normalisePredictions(data) {
-  const map = new Map(); // player_id -> [{id,home,away}, ...]
+  const map = new Map(); // player_id -> [{id, home, away, exact_home, exact_away, winner, spread_pick, total_pick}, ...]
+  const normOne = (raw) => {
+    const id = String(raw.id);
+    const home = toIntOrNull(raw.home ?? raw.home_score ?? raw.homeScore ?? raw.exact_home);
+    const away = toIntOrNull(raw.away ?? raw.away_score ?? raw.awayScore ?? raw.exact_away);
+    const exact_home = toIntOrNull(raw.exact_home ?? home);
+    const exact_away = toIntOrNull(raw.exact_away ?? away);
+    let winner = (raw.winner || '').toString().toUpperCase();
+    if (winner !== 'HOME' && winner !== 'AWAY') winner = null;
+
+    // If no explicit winner, infer from numeric prediction (if not a draw)
+    if (!winner && home != null && away != null && home !== away) {
+      winner = home > away ? 'HOME' : 'AWAY';
+    }
+
+    let spread_pick = (raw.spread_pick || raw.spreadPick || '').toString().toUpperCase();
+    if (spread_pick !== 'HOME' && spread_pick !== 'AWAY') spread_pick = null;
+
+    let total_pick = (raw.total_pick || raw.totalPick || raw.over_under || '').toString().toUpperCase();
+    if (total_pick !== 'OVER' && total_pick !== 'UNDER') total_pick = null;
+
+    return { id, home, away, exact_home, exact_away, winner, spread_pick, total_pick };
+  };
+
   if (Array.isArray(data)) {
     for (const row of data) {
       const pid = String(row.player_id ?? '').trim();
       const arr = Array.isArray(row.predictions) ? row.predictions : [];
       if (!pid) continue;
-      map.set(pid, arr.map(p => ({ id: String(p.id), home: Number(p.home ?? 0), away: Number(p.away ?? 0) })));
+      map.set(pid, arr.filter(p => p && p.id != null).map(normOne));
     }
   } else if (data && typeof data === 'object') {
     for (const [pidRaw, row] of Object.entries(data)) {
       const pid = String(pidRaw);
       const arr = Array.isArray(row?.predictions) ? row.predictions : [];
-      map.set(pid, arr.map(p => ({ id: String(p.id), home: Number(p.home ?? 0), away: Number(p.away ?? 0) })));
+      map.set(pid, arr.filter(p => p && p.id != null).map(normOne));
     }
   }
   return map;
 }
 
-function outcome(h, a) {
-  if (h > a) return 'H';
-  if (a > h) return 'A';
-  return 'D';
+// Basketball fixtures: accept many shapes; capture spread & total lines if present
+function normaliseFixtures(any) {
+  const out = new Map();
+  const norm = (m, idKey) => {
+    const id = String(m[idKey] ?? m.id ?? m.matchId ?? m.code ?? out.size + 1);
+    const home = m.home?.name ?? m.home ?? m.homeTeam ?? m.home_team ?? m.homeTeamName ?? 'Home';
+    const away = m.away?.name ?? m.away ?? m.awayTeam ?? m.away_team ?? m.awayTeamName ?? 'Away';
+    const ko   = m.kickoffISO ?? m.kickoff_iso ?? m.kickoff ?? m.tipoff_utc ?? m.utcDate ?? null;
+
+    // Spread & total lines (various keys)
+    const spread = Number(m.spread_line ?? m.spreadLine ?? m.line ?? m.home_spread ?? m.spread ?? NaN);
+    const total  = Number(m.total_line  ?? m.totalLine  ?? m.over_under ?? m.total ?? NaN);
+
+    out.set(id, {
+      id,
+      homeTeam: String(home),
+      awayTeam: String(away),
+      kickoffISO: ko,
+      spread_line: Number.isFinite(spread) ? spread : null,
+      total_line: Number.isFinite(total) ? total : null
+    });
+  };
+
+  if (Array.isArray(any)) {
+    for (const m of any) {
+      if (m && typeof m === 'object') norm(m, 'id');
+    }
+  } else if (any && typeof any === 'object') {
+    for (const [idRaw, m] of Object.entries(any)) {
+      if (m && typeof m === 'object') norm({ ...m, id: idRaw }, 'id');
+    }
+  }
+  return out;
 }
 
-// exact = 3, correct result only = 1, else 0
-function pointsFor(pred, actual) {
+/* ---------------- Basketball scoring ---------------- */
+
+// +2 correct winner, +1 correct spread side, +1 correct total side, +2 exact score bonus (push = 0)
+function computeBasketballPoints(pred, actual, fx) {
   if (!actual) return 0;
-  if (pred.home === actual.home && pred.away === actual.away) return 3;
-  return outcome(pred.home, pred.away) === outcome(actual.home, actual.away) ? 1 : 0;
+  let pts = 0;
+
+  // Winner (+2)
+  if (pred.winner) {
+    const homeWon = actual.home > actual.away;
+    if ((pred.winner === 'HOME' && homeWon) || (pred.winner === 'AWAY' && !homeWon)) {
+      pts += 2;
+    }
+  }
+
+  // Spread (+1) — requires fixture spread_line and a user pick; push (== 0) yields 0
+  const spread = fx?.spread_line;
+  if (typeof spread === 'number' && pred.spread_pick) {
+    const margin = (actual.home + spread) - actual.away; // home perspective
+    const homeCovers = margin > 0; // push ignored
+    if ((homeCovers && pred.spread_pick === 'HOME') || (!homeCovers && pred.spread_pick === 'AWAY')) {
+      pts += 1;
+    }
+  }
+
+  // Total (+1) — requires fixture total_line and a user pick; push (==) yields 0
+  const totalLine = fx?.total_line;
+  if (typeof totalLine === 'number' && pred.total_pick) {
+    const sum = actual.home + actual.away;
+    const isOver = sum > totalLine; // push ignored
+    if ((isOver && pred.total_pick === 'OVER') || (!isOver && pred.total_pick === 'UNDER')) {
+      pts += 1;
+    }
+  }
+
+  // Exact (+2) — only if user provided exact numbers
+  const gaveExact = Number.isInteger(pred.exact_home) && Number.isInteger(pred.exact_away);
+  if (gaveExact && pred.exact_home === actual.home && pred.exact_away === actual.away) {
+    pts += 2;
+  }
+
+  return pts;
 }
 
-function computeWeekTable(week, predMap, results, playersIndex) {
+/* ---------------- Fixtures helpers ---------------- */
+
+function readConfig(req) {
+  try {
+    const raw = fs.readFileSync(CFG_PATH(req), 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return { season: 2025 };
+  }
+}
+
+function readFixturesForWeek(req, week) {
+  const cfg = readConfig(req);
+  const fxBase = joinData(req, 'fixtures', `season-${cfg.season || 2025}`);
+  const raw =
+      readJson(path.join(fxBase, `week-${week}.json`), null)
+   ?? readJson(path.join(fxBase, 'weeks', `week-${week}.json`), null);
+  return normaliseFixtures(raw);
+}
+
+/* ---------------- Compute helpers ---------------- */
+
+function computeWeekTable(week, predMap, results, playersIndex, fixturesMap) {
   const table = []; // [{player_id, name, week_points}]
   for (const [pid, arr] of predMap.entries()) {
     let pts = 0;
     for (const p of arr) {
       const actual = results[p.id];
-      pts += pointsFor(p, actual);
+      const fx = fixturesMap.get(p.id) || null;
+      pts += computeBasketballPoints(p, actual, fx);
     }
     table.push({
       player_id: pid,
@@ -208,6 +328,7 @@ function computeAndPersist(req, week) {
                    ?? readJson(path.join(LEGACY_PRED_DIR(req), `week-${week}.json`), null);
   const resultsRaw = readJson(path.join(RES_DIR(req),  `week-${week}.json`), null)
                    ?? readJson(path.join(LEGACY_RES_DIR(req),  `week-${week}.json`), null);
+  const fixtures   = readFixturesForWeek(req, week);
 
   const predMap  = normalisePredictions(predsRaw);
   const results  = normaliseResults(resultsRaw);
@@ -215,7 +336,7 @@ function computeAndPersist(req, week) {
   const playersArr = readJson(PLAYERS(req), []);
   const playersIdx = new Map(playersArr.map(p => [String(p.id), { name: p.name || '' }]));
 
-  const weekTable = computeWeekTable(week, predMap, results, playersIdx);
+  const weekTable = computeWeekTable(week, predMap, results, playersIdx, fixtures);
 
   // Persist weekly scores (competition-scoped + legacy alias in comp folder)
   const weeklyOut = weekTable.map(r => ({
@@ -242,7 +363,7 @@ function computeAndPersist(req, week) {
   const weeklyWithSeason = weeklyOut.map(r => {
     const tot = totalsMap.get(r.player_id);
     return { ...r, seasonTotal: tot ? tot.totalPoints : r.weekPoints };
-  });
+    });
 
   return {
     week,
@@ -272,6 +393,7 @@ router.get('/', (req, res) => {
                    ?? readJson(path.join(LEGACY_PRED_DIR(req), `week-${week}.json`), null);
   const resultsRaw = readJson(path.join(RES_DIR(req),  `week-${week}.json`), null)
                    ?? readJson(path.join(LEGACY_RES_DIR(req),  `week-${week}.json`), null);
+  const fixtures   = readFixturesForWeek(req, week);
 
   const predMap  = normalisePredictions(predsRaw);
   const results  = normaliseResults(resultsRaw);
@@ -279,12 +401,12 @@ router.get('/', (req, res) => {
   const playersArr = readJson(PLAYERS(req), []);
   const playersIdx = new Map(playersArr.map(p => [String(p.id), { name: p.name || '' }]));
 
-  const table = computeWeekTable(week, predMap, results, playersIdx);
+  const table = computeWeekTable(week, predMap, results, playersIdx, fixtures);
 
   return res.json({
     ok: true,
     week,
-    fixturesCount: Object.keys(results).length,
+    fixturesCount: fixtures.size || Object.keys(results).length,
     playerCount: predMap.size,
     scores: table
   });
@@ -323,11 +445,13 @@ router.get('/week', (req, res) => {
                      ?? readJson(path.join(LEGACY_PRED_DIR(req), `week-${week}.json`), null);
     const resultsRaw = readJson(path.join(RES_DIR(req),  `week-${week}.json`), null)
                      ?? readJson(path.join(LEGACY_RES_DIR(req),  `week-${week}.json`), null);
+    const fixtures   = readFixturesForWeek(req, week);
+
     const predMap    = normalisePredictions(predsRaw);
     const results    = normaliseResults(resultsRaw);
     const playersArr = readJson(PLAYERS(req), []);
     const playersIdx = new Map(playersArr.map(p => [String(p.id), { name: p.name || '' }]));
-    const table      = computeWeekTable(week, predMap, results, playersIdx);
+    const table      = computeWeekTable(week, predMap, results, playersIdx, fixtures);
     weekly = table.map(r => ({ player_id: r.player_id, player: r.name, weekPoints: r.week_points }));
     saved = false;
   }
@@ -363,11 +487,13 @@ router.get('/summary', (req, res) => {
                          ?? readJson(path.join(LEGACY_PRED_DIR(req), `week-${week}.json`), null);
         const resultsRaw = readJson(path.join(RES_DIR(req),  `week-${week}.json`), null)
                          ?? readJson(path.join(LEGACY_RES_DIR(req),  `week-${week}.json`), null);
+        const fixtures   = readFixturesForWeek(req, week);
+
         const predMap    = normalisePredictions(predsRaw);
         const results    = normaliseResults(resultsRaw);
         const playersArr = readJson(PLAYERS(req), []);
         const playersIdx = new Map(playersArr.map(p => [String(p.id), { name: p.name || '' }]));
-        const table      = computeWeekTable(week, predMap, results, playersIdx);
+        const table      = computeWeekTable(week, predMap, results, playersIdx, fixtures);
         weekly = table.map(r => ({ player_id: r.player_id, player: r.name, weekPoints: r.week_points }));
       }
     }
@@ -386,38 +512,7 @@ router.get('/summary', (req, res) => {
   }
 });
 
-// ---- Player week breakdown: predictions + results + per-match points
-
-function readConfig(req) {
-  try {
-    const raw = fs.readFileSync(CFG_PATH(req), 'utf8');
-    return JSON.parse(raw);
-  } catch {
-    return { season: 2025 };
-  }
-}
-
-function normaliseFixtures(any) {
-  const out = new Map();
-  if (Array.isArray(any)) {
-    for (const m of any) {
-      const id = String(m.id ?? m.matchId ?? m.code ?? out.size + 1);
-      const home = m.home?.name ?? m.home ?? m.homeTeam ?? m.home_team ?? m.homeTeamName ?? 'Home';
-      const away = m.away?.name ?? m.away ?? m.awayTeam ?? m.away_team ?? m.awayTeamName ?? 'Away';
-      const ko   = m.kickoffISO ?? m.kickoff_iso ?? m.kickoff ?? m.utcDate ?? null;
-      out.set(id, { id, homeTeam: String(home), awayTeam: String(away), kickoffISO: ko });
-    }
-  } else if (any && typeof any === 'object') {
-    for (const [idRaw, m] of Object.entries(any)) {
-      const id = String(idRaw);
-      const home = m.home?.name ?? m.home ?? m.homeTeam ?? m.home_team ?? m.homeTeamName ?? 'Home';
-      const away = m.away?.name ?? m.away ?? m.awayTeam ?? m.away_team ?? m.awayTeamName ?? 'Away';
-      const ko   = m.kickoffISO ?? m.kickoff_iso ?? m.kickoff ?? m.utcDate ?? null;
-      out.set(id, { id, homeTeam: String(home), awayTeam: String(away), kickoffISO: ko });
-    }
-  }
-  return out;
-}
+// ---- Player week breakdown: predictions + results + per-match points (basketball)
 
 function findPlayerByName(playersArr, name) {
   if (!name) return null;
@@ -440,11 +535,7 @@ router.get('/player-week', (req, res) => {
   }
   if (!playerId) return res.status(400).json({ ok: false, error: 'player_id or name required' });
 
-  const cfg = readConfig(req);
-  const fxBase = joinData(req, 'fixtures', `season-${cfg.season || 2025}`);
-  const fixturesRaw =
-      readJson(path.join(fxBase, `week-${week}.json`), null)
-   ?? readJson(path.join(fxBase, 'weeks', `week-${week}.json`), null);
+  const fixtures = readFixturesForWeek(req, week);
 
   const predsRaw   = readJson(path.join(PRED_DIR(req), `week-${week}.json`), null)
                    ?? readJson(path.join(LEGACY_PRED_DIR(req), `week-${week}.json`), null);
@@ -453,7 +544,6 @@ router.get('/player-week', (req, res) => {
 
   const predMap  = normalisePredictions(predsRaw);
   const results  = normaliseResults(resultsRaw);
-  const fixtures = normaliseFixtures(fixturesRaw);
 
   const playerPreds = new Map((predMap.get(playerId) || []).map(p => [String(p.id), p]));
 
@@ -465,16 +555,25 @@ router.get('/player-week', (req, res) => {
   ]));
 
   for (const id of ids) {
-    const fx = fixtures.get(id) || { id, homeTeam: 'Home', awayTeam: 'Away', kickoffISO: null };
-    const pred = playerPreds.get(id) || null;
+    const fx = fixtures.get(id) || { id, homeTeam: 'Home', awayTeam: 'Away', kickoffISO: null, spread_line: null, total_line: null };
+    const pred   = playerPreds.get(id) || null;
     const actual = results[id] || null;
 
     let pts = null;
     if (actual && pred) {
-      pts = pointsFor(pred, actual);
+      pts = computeBasketballPoints(pred, actual, fx);
       weekPoints += pts;
-      if (pts === 3) exactCount++;
-      else if (pts === 1) outcomeCount++;
+
+      // Tally details
+      const gaveExact = Number.isInteger(pred.exact_home) && Number.isInteger(pred.exact_away);
+      if (gaveExact && pred.exact_home === actual.home && pred.exact_away === actual.away) {
+        exactCount++;
+      } else if (pred.winner) {
+        const homeWon = actual.home > actual.away;
+        if ((pred.winner === 'HOME' && homeWon) || (pred.winner === 'AWAY' && !homeWon)) {
+          outcomeCount++;
+        }
+      }
     } else if (!actual) {
       pendingCount++;
     } else if (actual && !pred) {
@@ -486,7 +585,17 @@ router.get('/player-week', (req, res) => {
       homeTeam: fx.homeTeam,
       awayTeam: fx.awayTeam,
       kickoffISO: fx.kickoffISO,
-      prediction: pred ? { home: pred.home, away: pred.away } : null,
+      lines: {
+        spread_line: fx.spread_line,
+        total_line: fx.total_line
+      },
+      prediction: pred ? {
+        winner: pred.winner,
+        spread_pick: pred.spread_pick,
+        total_pick: pred.total_pick,
+        exact_home: pred.exact_home ?? pred.home ?? null,
+        exact_away: pred.exact_away ?? pred.away ?? null
+      } : null,
       result: actual ? { home: actual.home, away: actual.away } : null,
       points: pts
     });

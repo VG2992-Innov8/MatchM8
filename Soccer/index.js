@@ -365,6 +365,26 @@ app.get('/api/__meta', (req, res) => {
   });
 });
 
+// Tenant/competition meta for UI headers
+app.get('/api/tenant/meta', (req, res) => {
+  const tcfg = readTenantConfigFor(req); // tenant-level config.json
+  const brand_title    = tcfg.brand_title    || process.env.APP_TITLE || 'MatchM8';
+  const brand_subtitle = tcfg.brand_subtitle || (req.ctx?.tenant || '');
+  const sport          = tcfg.sport || null;
+
+  const competition = req.ctx?.comp || tcfg.defaultCompetition || '';
+
+  res.json({
+    ok: true,
+    appTitle: process.env.APP_TITLE || 'MatchM8',
+    tenant: req.ctx?.tenant || 'default',
+    competition,
+    brand_title,
+    brand_subtitle,
+    sport
+  });
+});
+
 // ✅ Public READ results (tenant+comp aware) — normalize legacy shapes
 app.get('/api/results', (req, res) => {
   try {
