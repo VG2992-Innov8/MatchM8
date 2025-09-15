@@ -15,33 +15,26 @@
     .match .team{min-width:120px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .match .sep{margin:0 8px}
 
-    /* Bigger prediction inputs (fits 3-digit scores) */
-    .match input.pred,
-    input[type="number"].pred,
-    input.score,
-    .score-input {
-      min-width: 6ch;           /* ~3 digits + spacing */
-      padding: 6px 8px;
-      font-size: 16px;          /* avoids iOS zoom */
-      text-align: center;
-      box-sizing: content-box;  /* keep ch width predictable */
+    /* Compact, predictable inputs for score */
+    .match input.pred{
+      width:64px;             /* fits 3 digits */
+      text-align:center;
+      padding:.35rem .5rem;
+      font-size:16px;         /* avoid iOS zoom */
+      flex:0 0 auto;          /* never stretch */
+      box-sizing:border-box;
     }
 
-    /* Pick controls (Winner / ATS / O-U) */
-    .pick-wrap { display:flex; align-items:center; gap:8px; flex-wrap:wrap }
-    .pick-wrap label { font-size: .9rem; opacity: .8 }
-    .pick-wrap select {
-      padding: 6px 8px;
-      border: 1px solid var(--border, #d1d5db);
-      border-radius: 8px;
-      background: #fff;
+    /* Winner select */
+    .pick-winner{
+      padding:.3rem .5rem;
+      font-size:14px;
     }
-    .linespill { font-size:.9rem; opacity:.7; }
 
-    /* --- Inline Results + Points widget --- */
+    /* Inline Results + Points widget */
     .rpw-wrap{display:inline-flex;align-items:center;gap:6px;margin-left:10px;flex:0 0 auto;white-space:nowrap}
     .rpw-wrap .num-box{
-      width:44px !important;
+      width:44px;
       padding:2px 6px;
       box-sizing:border-box;
       text-align:center;
@@ -54,18 +47,17 @@
       display:inline-block;
     }
 
-    /* --- (optional) grid version kept for later tidy-ups --- */
-    .match-grid {
-      display: grid;
-      grid-template-columns: 28px minmax(160px,1fr) 56px 14px 56px 24px 56px 14px 56px auto;
-      align-items: center;
-      gap: 8px;
-      margin: 10px 0;
+    /* Tiny badges next to winner/ATS/OU labels */
+    .pill {
+      display:inline-flex; align-items:center; gap:4px;
+      padding:2px 6px; border:1px solid var(--border,#d0d7de);
+      border-radius:999px; font-size:12px; background:#f7fafc;
     }
-    .match-grid .idx { text-align: right; opacity: .8; }
-    .match-grid .dash { text-align: center; opacity: .7; }
-    .match-grid input.pred, .match-grid input.res { width: 56px; text-align: center; padding: 6px 8px; }
-    .match-grid .team { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    /* Small helper note under the controls */
+    .legend { margin-top:10px; font-size:13px; line-height:1.35 }
+    .legend b { font-weight:600 }
+    .legend code { background:#f4f4f4; padding:0 .25rem; border-radius:4px }
   </style>
 </head>
 <body>
@@ -90,13 +82,24 @@
       <div id="banner" class="banner ok" style="display:none;margin-top:12px;">✅ Saved.</div>
       <div id="noFx" class="banner" style="display:none;margin-top:12px;">No fixtures yet for this week.</div>
       <div id="lockedAll" class="banner" style="display:none;margin-top:12px;">⏳ Locked for this week (deadline reached).</div>
+
+      <!-- Congrats banner (last-week winners) -->
+      <div id="winCongrats" class="banner ok" style="display:none;margin-top:12px;"></div>
+
+      <!-- Clear legend: how points work & what n/a means -->
+      <div class="legend">
+        <b>How points are scored:</b>
+        Winner <b>(+2)</b>, Against the Spread (ATS) <b>(+1)</b>, Over/Under (O/U) <b>(+1)</b>, Exact score <b>(+2)</b>.<br>
+        If a fixture has no betting line, ATS or O/U shows <code>n/a</code>. If you leave ATS/O/U blank, we
+        <em>infer</em> them from your exact score prediction (when a line exists). You can also pick the Winner explicitly.
+      </div>
     </div>
 
     <div id="matches"></div>
   </main>
 
   <script>
-    /* ---------------- scope helpers (tenant + competition) ---------------- */
+    /* ---------------- scope helper (tenant + competition) ---------------- */
     const PAGE_QS = new URLSearchParams(location.search);
     const TENANT = PAGE_QS.get('t') || localStorage.getItem('tenant') || '';
     const COMP   = (PAGE_QS.get('c') || localStorage.getItem('comp') || '').trim();
@@ -130,8 +133,7 @@
 
     function setScoringLink(){
       const wk = clamp(Number(weekInput.value || 1));
-      document.getElementById('toScoring').href =
-        withScope(`/Part_D_Scoring.html?week=${wk}`);
+      document.getElementById('toScoring').href = withScope(`/Part_D_Scoring.html?week=${wk}`);
     }
     function setWeekLabel(){
       const wk = clamp(Number(weekInput.value || 1));
@@ -146,9 +148,8 @@
         const [h,a]=line.querySelectorAll('input.pred');
         if (h) h.value = '';
         if (a) a.value = '';
-        const selW = line.querySelector('select.pick-winner'); if (selW) selW.value = '';
-        const selA = line.querySelector('select.pick-ats');    if (selA) selA.value = '';
-        const selT = line.querySelector('select.pick-ou');     if (selT) selT.value = '';
+        const sel = line.querySelector('.pick-winner');
+        if (sel) sel.value = '';
       });
     }
 
@@ -176,27 +177,32 @@
         const res = await fetch(withScope(`/api/fixtures?week=${encodeURIComponent(week)}`), {cache:'no-store'});
         if(!res.ok) return [];
         const data = await res.json();
-        // Support both array and {id:{...}} shapes
-        const listRaw = Array.isArray(data) ? data
-                  : Array.isArray(data.fixtures) ? data.fixtures
-                  : (data && typeof data === 'object') ? Object.entries(data).map(([id, v]) => ({ id, ...v }))
-                  : [];
-        // normalise names + optional betting lines
-        return listRaw.map((m, i) => {
-          const spread = Number(m.spread_line ?? m.spreadLine ?? m.line ?? m.home_spread ?? m.spread);
-          const total  = Number(m.total_line  ?? m.totalLine  ?? m.over_under  ?? m.total);
-          return {
-            id: m.id || m.matchId || m.code || String(i+1),
-            home: m.home?.name ?? m.home ?? m.homeTeam ?? m.home_team ?? 'Home',
-            away: m.away?.name ?? m.away ?? m.awayTeam ?? m.away_team ?? 'Away',
-            kickoffISO: m.kickoffISO || m.kickoff_iso || m.kickoff || m.tipoff_utc || null,
-            spread_line: Number.isFinite(spread) ? spread : null,
-            total_line: Number.isFinite(total) ? total : null
-          };
-        });
-      }catch{
-        return [];
-      }
+        const list = Array.isArray(data) ? data : (Array.isArray(data.fixtures) ? data.fixtures : []);
+        // normalize names/ids/lines
+        return (Array.isArray(list)?list:[]).map((m,i)=>({
+          id: String(m.id ?? m.matchId ?? m.code ?? i+1),
+          home: m.home?.name ?? m.home ?? m.homeTeam ?? m.home_team ?? 'Home',
+          away: m.away?.name ?? m.away ?? m.awayTeam ?? m.away_team ?? 'Away',
+          kickoff: m.kickoffISO ?? m.kickoff_iso ?? m.kickoff ?? m.utcDate ?? null,
+          spread: Number.isFinite(+m.spread_line ?? NaN) ? +m.spread_line
+                : Number.isFinite(+m.line ?? NaN) ? +m.line
+                : Number.isFinite(+m.home_spread ?? NaN) ? +m.home_spread
+                : (Number.isFinite(+m.spread ?? NaN) ? +m.spread : null),
+          total: Number.isFinite(+m.total_line ?? NaN) ? +m.total_line
+               : (Number.isFinite(+m.over_under ?? NaN) ? +m.over_under
+               : (Number.isFinite(+m.total ?? NaN) ? +m.total : null))
+        }));
+      }catch{ return []; }
+    }
+
+    function rowLegend(spread, total){
+      const ats = (spread==null)
+        ? `<span class="pill" title="ATS (Against the Spread) is not available for this fixture.">ATS n/a</span>`
+        : `<span class="pill" title="ATS: we infer HOME/AWAY from your predicted score using the listed spread.">ATS ${spread}</span>`;
+      const ou = (total==null)
+        ? `<span class="pill" title="Over/Under is not available for this fixture.">O/U n/a</span>`
+        : `<span class="pill" title="O/U: we infer OVER/UNDER from your predicted score using the total line.">O/U ${total}</span>`;
+      return `${ats} &nbsp; ${ou}`;
     }
 
     function render(fixtures){
@@ -213,13 +219,10 @@
       noFxMsg.style.display = 'none';
 
       lastFixtures.forEach((fx, i) => {
-        const ko = fx.kickoffISO || null;
         const row = document.createElement('div');
         row.className = 'match';
-        const hasATS = Number.isFinite(fx.spread_line);
-        const hasOU  = Number.isFinite(fx.total_line);
         row.innerHTML = `
-          <div class="line" data-id="${fx.id}" data-ko="${ko||''}">
+          <div class="line" data-id="${fx.id}" data-ko="${fx.kickoff||''}">
             <div class="no">${i+1}</div>
             <div class="team">${fx.home}</div>
             <input class="pred" type="number" min="0" inputmode="numeric" aria-label="${fx.home} score">
@@ -227,37 +230,18 @@
             <input class="pred" type="number" min="0" inputmode="numeric" aria-label="${fx.away} score">
             <div class="team">${fx.away}</div>
 
-            <!-- Pick controls -->
-            <div class="pick-wrap" style="margin-left:6px">
-              <label>Winner
-                <select class="pick pick-winner" aria-label="Winner pick">
-                  <option value="">—</option>
-                  <option value="HOME">HOME</option>
-                  <option value="AWAY">AWAY</option>
-                </select>
-              </label>
-              ${hasATS ? `
-                <label>ATS
-                  <select class="pick pick-ats" aria-label="Against the Spread">
-                    <option value="">—</option>
-                    <option value="HOME">HOME</option>
-                    <option value="AWAY">AWAY</option>
-                  </select>
-                </label>` : `<span class="muted">ATS n/a</span>`}
-              ${hasOU ? `
-                <label>O/U
-                  <select class="pick pick-ou" aria-label="Over or Under">
-                    <option value="">—</option>
-                    <option value="OVER">OVER</option>
-                    <option value="UNDER">UNDER</option>
-                  </select>
-                </label>` : `<span class="muted">O/U n/a</span>`}
-              ${(hasATS || hasOU) ? `<span class="linespill">`
-                + (hasATS ? `Spread: ${fx.spread_line}` : '')
-                + (hasATS && hasOU ? ' • ' : '')
-                + (hasOU ? `Total: ${fx.total_line}` : '')
-                + `</span>` : ''}
-            </div>
+            <!-- Winner picker (optional) -->
+            <span class="pill">
+              <span>Winner</span>
+              <select class="pick-winner" aria-label="Winner">
+                <option value="">(infer)</option>
+                <option value="HOME">HOME</option>
+                <option value="AWAY">AWAY</option>
+              </select>
+            </span>
+
+            <!-- Lines info (ATS / O/U) with tooltips -->
+            ${rowLegend(fx.spread, fx.total)}
 
             <!-- Inline Results + Points -->
             <span class="rpw-wrap" data-match-id="${fx.id}">
@@ -293,9 +277,8 @@
         const [h,a]=line.querySelectorAll('input.pred');
         if (h) h.value = (p.home == null) ? '' : p.home;
         if (a) a.value = (p.away == null) ? '' : p.away;
-        const selW = line.querySelector('select.pick-winner'); if (selW) selW.value = (p.winner || '');
-        const selA = line.querySelector('select.pick-ats');    if (selA) selA.value = (p.spread_pick || p.spreadPick || '');
-        const selT = line.querySelector('select.pick-ou');     if (selT) selT.value = (p.total_pick || p.totalPick || p.over_under || '');
+        const sel=line.querySelector('.pick-winner');
+        if (sel && (p.winner === 'HOME' || p.winner === 'AWAY' || p.winner === '')) sel.value = p.winner || '';
       });
     }
 
@@ -324,18 +307,12 @@
       let anyEditable = false;
       lines.forEach(line=>{
         const [h,a]=line.querySelectorAll('input.pred');
-        const selW = line.querySelector('select.pick-winner');
-        const selA = line.querySelector('select.pick-ats');
-        const selT = line.querySelector('select.pick-ou');
+        const sel = line.querySelector('.pick-winner');
         const tag = line.querySelector('.lock-pill');
         const koMs = Date.parse(line.dataset.ko || '') || NaN;
 
         const locked = allLock || (DEADLINE_MODE === 'per_match' && Number.isFinite(koMs) && isLockedByTime(koMs));
-        if (h) h.disabled = locked;
-        if (a) a.disabled = locked;
-        if (selW) selW.disabled = locked;
-        if (selA) selA.disabled = locked;
-        if (selT) selT.disabled = locked;
+        h.disabled = a.disabled = sel.disabled = locked;
         tag.style.display = locked ? 'inline-flex' : 'none';
 
         if (!locked) anyEditable = true;
@@ -363,25 +340,16 @@
 
       // Build predictions, skipping locked rows
       const predictions = Array.from(lines).map(line=>{
-        const [h,a] = line.querySelectorAll('input.pred');
-        const selW  = line.querySelector('select.pick-winner');
-        const selA  = line.querySelector('select.pick-ats');
-        const selT  = line.querySelector('select.pick-ou');
-
-        // if any inputs are disabled for this line, consider the row locked/uneditable
-        const locked = (h && h.disabled) || (a && a.disabled)
-                    || (selW && selW.disabled) || (selA && selA.disabled) || (selT && selT.disabled);
-        if (locked) return null;
-
-        const winner = selW ? (selW.value || null) : null;
-        const spread_pick = selA ? (selA.value || null) : null;
-        const total_pick  = selT ? (selT.value || null) : null;
-
+        const [h,a]=line.querySelectorAll('input.pred');
+        const sel = line.querySelector('.pick-winner');
+        if (h.disabled || a.disabled) return null;
+        const winner = sel?.value || ''; // '' means infer
         return {
           id: line.dataset.id,
-          home: h ? (h.value === '' ? null : Number(h.value)) : null,
-          away: a ? (a.value === '' ? null : Number(a.value)) : null,
-          winner, spread_pick, total_pick
+          home: h.value === '' ? null : Number(h.value),
+          away: a.value === '' ? null : Number(a.value),
+          ...(winner ? { winner } : {})
+          // ATS/O-U are inferred from scores server-side; nothing to send here
         };
       }).filter(Boolean);
 
@@ -488,6 +456,39 @@
       });
     }
 
+    // ---- Last-week winners congrats (uses matrix to find most recent week) ----
+    async function showLastWeekWinnerCongrats(){
+      const box = document.getElementById('winCongrats');
+      if (!box) return;
+
+      const r = await fetch(withScope('/api/scores/leaderboard/matrix?window=60'), { cache:'no-store' }).catch(()=>null);
+      if (!r || !r.ok) { box.style.display='none'; return; }
+      const m = await r.json().catch(()=>null);
+      const endWeek = m?.endWeek;
+      const weeks = m?.weeks || [];
+      if (!endWeek || !weeks.length) { box.style.display='none'; return; }
+
+      const r2 = await fetch(withScope(`/api/scores/summary?week=${endWeek}`), { cache:'no-store' }).catch(()=>null);
+      if (!r2 || !r2.ok) { box.style.display='none'; return; }
+      const sum = await r2.json().catch(()=>null);
+      const weekly = Array.isArray(sum?.weekly) ? sum.weekly : [];
+      if (!weekly.length) { box.style.display='none'; return; }
+
+      const maxPts = Math.max(...weekly.map(w => Number(w.weekPoints ?? w.week_points ?? 0)));
+      const wins = weekly.filter(w => Number(w.weekPoints ?? w.week_points ?? 0) === maxPts);
+      if (!wins.length) { box.style.display='none'; return; }
+
+      const names = wins.map(w => (w.player || w.name || '').trim()).filter(Boolean);
+      const meName = (localStorage.getItem('player_name') || localStorage.getItem('playerName') || '').trim();
+      const isMe = meName && names.some(n => n.toLowerCase() === meName.toLowerCase());
+
+      box.innerHTML = isMe
+        ? `🎉 <strong>Congrats!</strong> You were week ${endWeek} winner with <strong>${maxPts}</strong> pts.`
+        : `🏆 Week ${endWeek} winner${names.length>1?'s':''}: <strong>${names.join(', ')}</strong> `
+          + `<span class="muted">(${maxPts} pts)</span>`;
+      box.style.display = 'block';
+    }
+
     // ---- wires ----
     document.getElementById('load').addEventListener('click', load);
     document.getElementById('save').addEventListener('click', save);
@@ -498,7 +499,11 @@
       load(); // reload fixtures + results on week change
     });
 
-    (async () => { await loadConfig(); await load(); })();
+    (async () => {
+      await loadConfig();
+      await load();
+      await showLastWeekWinnerCongrats();
+    })();
   </script>
 
   <!-- admin health check (quiet) -->
