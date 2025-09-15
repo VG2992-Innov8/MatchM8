@@ -5,166 +5,21 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Scoring — MatchM8</title>
   <link rel="stylesheet" href="/styles.css">
+
+  <style>
+    /* Details UI (lightweight, no deps) */
+    .mm8-btn{padding:.25rem .5rem;border:1px solid #ddd;border-radius:.5rem;background:#f7f7f7;cursor:pointer}
+    .mm8-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;z-index:9999}
+    .mm8-modal{background:#fff;max-width:900px;width:90%;border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.2);overflow:hidden}
+    .mm8-modal-header{display:flex;justify-content:space-between;gap:1rem;padding:.75rem 1rem;border-bottom:1px solid #eee}
+    .mm8-modal-body{padding:1rem;display:flex;flex-direction:column;gap:.75rem;max-height:70vh;overflow:auto}
+    .mm8-row{display:grid;grid-template-columns:1.3fr .9fr .9fr .7fr 1fr;gap:.5rem;align-items:center;padding:.5rem;border:1px solid #f0f0f0;border-radius:.75rem}
+    .mm8-points span{margin-right:.5rem;font-size:.85rem;padding:.1rem .35rem;border-radius:.5rem;border:1px solid #ddd}
+    .mm8-points span.ok{background:#e9f8ee;border-color:#b7e2c3}
+    .mm8-points span.no{background:#fbeaea;border-color:#f1c1c1}
+    .mm8-points b{margin-left:.5rem}
+  </style>
 </head>
-
-<style>
-/* Details UI (lightweight, no deps) */
-.mm8-btn{padding:.25rem .5rem;border:1px solid #ddd;border-radius:.5rem;background:#f7f7f7;cursor:pointer}
-.mm8-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;z-index:9999}
-.mm8-modal{background:#fff;max-width:900px;width:90%;border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.2);overflow:hidden}
-.mm8-modal-header{display:flex;justify-content:space-between;gap:1rem;padding:.75rem 1rem;border-bottom:1px solid #eee}
-.mm8-modal-body{padding:1rem;display:flex;flex-direction:column;gap:.75rem;max-height:70vh;overflow:auto}
-.mm8-row{display:grid;grid-template-columns:1.2fr .9fr .9fr .6fr .9fr;gap:.5rem;align-items:center;padding:.5rem;border:1px solid #f0f0f0;border-radius:.75rem}
-.mm8-points span{margin-right:.5rem;font-size:.85rem;padding:.1rem .35rem;border-radius:.5rem;border:1px solid #ddd}
-.mm8-points span.ok{background:#e9f8ee;border-color:#b7e2c3}
-.mm8-points span.no{background:#fbeaea;border-color:#f1c1c1}
-.mm8-points b{margin-left:.5rem}
-</style>
-
-<script>
-(function(){
-  const qs=new URLSearchParams(location.search);
-  const tenant=qs.get('t')||'default';
-  const comp=qs.get('c')||'';
-  const week=Number(qs.get('week'))||1;
-
-  // Find the main standings table on the page
-  const table=document.querySelector('table');
-  if(!table) return;
-
-  // Add "Details" header
-  const thead=table.tHead || table.querySelector('thead');
-  if(thead && thead.rows[0]) {
-    const th=document.createElement('th'); th.textContent='Details';
-    thead.rows[0].appendChild(th);
-  }
-
-  // For each row, add a "View" button that opens a per-match breakdown
-  const tbody=table.tBodies[0] || table.querySelector('tbody');
-  if(!tbody) return;
-  [...tbody.rows].forEach(tr => {
-    const nameCell=tr.cells[0] || tr.querySelector('td'); // assume first cell is Player name
-    const playerName=nameCell?.textContent?.trim();
-    const td=document.createElement('td');
-    const btn=document.createElement('button'); btn.textContent='View'; btn.className='mm8-btn';
-    td.appendChild(btn); tr.appendChild(td);
-
-    btn.addEventListener('click', async () => {
-      try{
-        // We can resolve by name thanks to the server-side finder
-        const url = `/api/scores/player-week?week=${week}&name=${encodeURIComponent(playerName)}&t=${encodeURIComponent(tenant)}&c=${encodeURIComponent(comp)}`;
-        const res=await fetch(url); const data=await res.json();
-        if (!data.ok) throw new Error(data.error || 'failed');
-        showBreakdownModal(data);
-      }catch(e){ alert('Failed to load breakdown');}
-    });
-  });
-
-  function showBreakdownModal(data){
-    const rows = data.rows || [];
-    const overlay=document.createElement('div');
-    overlay.className='mm8-overlay';
-    overlay.innerHTML = `
-      <div class="mm8-modal">
-        <div class="mm8-modal-header">
-          <strong>${data.player?.name || 'Player'}</strong> — Week ${data.week} • ${data.totals?.weekPoints ?? 0} pts
-          <button class="mm8-close" aria-label="Close">×</button>
-        </div>
-        <div class="mm8-modal-body">
-          ${rows.map(r => renderRow(r)).join('')}
-        </div>
-      </div>`;
-    document.body.appendChild(overlay);
-    overlay.querySelector('.mm8-close').onclick = () => overlay.remove();
-    overlay.addEventListener('click', e => { if (e.target===overlay) overlay.remove(); });
-  }
-
-  function renderRow(r){
-    // infer picks if user only entered numeric prediction (matches server scoring)
-    const spreadPick = r.prediction?.spread_pick ?? inferSpreadPick(r);
-    const totalPick  = r.prediction?.total_pick  ?? inferTotalPick(r);
-
-    const gotWinner = (function(){
-      if (!r.result || !r.prediction) return false;
-      const homeWon = r.result.home > r.result.away;
-      if (r.prediction.winner === 'HOME') return homeWon;
-      if (r.prediction.winner === 'AWAY') return !homeWon;
-      if (Number.isInteger(r.prediction.exact_home) && Number.isInteger(r.prediction.exact_away)) {
-        if (r.prediction.exact_home === r.prediction.exact_away) return false; // no draws in basketball
-        return (r.prediction.exact_home > r.prediction.exact_away) === homeWon;
-      }
-      return false;
-    })();
-
-    const gotSpread = (function(){
-      if (!r.result || !Number.isFinite(r?.lines?.spread_line) || !spreadPick) return false;
-      const margin = (r.result.home + r.lines.spread_line) - r.result.away;
-      if (margin === 0) return false; // push
-      const homeCovers = margin > 0;
-      return (homeCovers && spreadPick === 'HOME') || (!homeCovers && spreadPick === 'AWAY');
-    })();
-
-    const gotTotal = (function(){
-      if (!r.result || !Number.isFinite(r?.lines?.total_line) || !totalPick) return false;
-      const sum = r.result.home + r.result.away;
-      if (sum === r.lines.total_line) return false; // push
-      const isOver = sum > r.lines.total_line;
-      return (isOver && totalPick === 'OVER') || (!isOver && totalPick === 'UNDER');
-    })();
-
-    const gotExact = !!(r.result && r.prediction
-      && Number.isInteger(r.prediction.exact_home)
-      && Number.isInteger(r.prediction.exact_away)
-      && r.prediction.exact_home === r.result.home
-      && r.prediction.exact_away === r.result.away);
-
-    return `
-      <div class="mm8-row">
-        <div class="mm8-match"><strong>${r.homeTeam}</strong> vs <strong>${r.awayTeam}</strong></div>
-        <div class="mm8-lines">${fmtLine(r.lines)}</div>
-        <div class="mm8-pred">${fmtPred(r, spreadPick, totalPick)}</div>
-        <div class="mm8-res">${fmtRes(r)}</div>
-        <div class="mm8-points">
-          <span class="${gotWinner?'ok':'no'}">Winner${gotWinner?'+2':''}</span>
-          ${spreadPick?`<span class="${gotSpread?'ok':'no'}">ATS${gotSpread?'+1':''}</span>`:''}
-          ${totalPick?`<span class="${gotTotal?'ok':'no'}">O/U${gotTotal?'+1':''}</span>`:''}
-          <span class="${gotExact?'ok':'no'}">Exact${gotExact?'+2':''}</span>
-          <b>${r.points ?? 0} pts</b>
-        </div>
-      </div>`;
-  }
-
-  function fmtLine(lines){
-    if(!lines) return '';
-    const s = Number.isFinite(lines.spread_line) ? `Spread: ${lines.spread_line}` : '';
-    const t = Number.isFinite(lines.total_line)  ? `Total: ${lines.total_line}`   : '';
-    return [s,t].filter(Boolean).join(' • ');
-  }
-  function fmtPred(r, spreadPick, totalPick){
-    if (!r.prediction) return '<em>(no prediction)</em>';
-    const parts=[];
-    if (Number.isInteger(r.prediction.exact_home) && Number.isInteger(r.prediction.exact_away))
-      parts.push(`Pred: ${r.prediction.exact_home}-${r.prediction.exact_away}`);
-    if (r.prediction.winner) parts.push(`Winner: ${r.prediction.winner}`);
-    if (spreadPick) parts.push(`ATS: ${spreadPick}`);
-    if (totalPick)  parts.push(`O/U: ${totalPick}`);
-    return parts.join(' • ');
-  }
-  function fmtRes(r){ return r.result ? `Final: ${r.result.home}-${r.result.away}` : '<em>Pending</em>'; }
-  function inferSpreadPick(r){
-    if (!r.lines || !Number.isFinite(r.lines.spread_line)) return null;
-    if (!r.prediction || !Number.isInteger(r.prediction.exact_home) || !Number.isInteger(r.prediction.exact_away)) return null;
-    const m = (r.prediction.exact_home + r.lines.spread_line) - r.prediction.exact_away;
-    return m>0?'HOME':m<0?'AWAY':null;
-  }
-  function inferTotalPick(r){
-    if (!r.lines || !Number.isFinite(r.lines.total_line)) return null;
-    if (!r.prediction || !Number.isInteger(r.prediction.exact_home) || !Number.isInteger(r.prediction.exact_away)) return null;
-    const sum = r.prediction.exact_home + r.prediction.exact_away;
-    return sum>r.lines.total_line?'OVER':sum<r.lines.total_line?'UNDER':null;
-  }
-})();
-</script>
 
 <body>
   <div id="hero" data-page="Scoring"></div>
@@ -194,6 +49,7 @@
             <th>Player</th>
             <th>Week Points</th>
             <th>Season Total</th>
+            <th>Details</th>
           </tr>
         </thead>
         <tbody></tbody>
@@ -203,33 +59,21 @@
   </main>
 
   <script>
-  /* ---------------- tenant helpers ---------------- */
+  /* ---------------- scope helpers (tenant + competition) ---------------- */
+  const PAGE_QS = new URLSearchParams(location.search);
+  const TENANT = PAGE_QS.get('t') || localStorage.getItem('tenant') || '';
+  const COMP   = (PAGE_QS.get('c') || localStorage.getItem('comp') || '').trim();
+  if (TENANT) { try { localStorage.setItem('tenant', TENANT); } catch {} }
+  if (COMP)   { try { localStorage.setItem('comp', COMP); } catch {} }
+
   function withScope(url) {
     const u = new URL(url, location.origin);
-    const t = new URLSearchParams(location.search).get('t') || localStorage.getItem('tenant') || '';
-    if (t) u.searchParams.set('t', t);
+    if (TENANT) u.searchParams.set('t', TENANT);
+    if (COMP)   u.searchParams.set('c', COMP);
     return u.toString();
   }
 
-    // >>> Competition helper (NEW) <<<
-    const COMP = (new URLSearchParams(location.search).get('c') || localStorage.getItem('comp') || '').trim();
-    if (COMP) { try { localStorage.setItem('comp', COMP); } catch {} }
-    function withScope(url){
-      const u = new URL(withScope(url), location.origin);
-      if (COMP) u.searchParams.set('c', COMP);
-      return u.toString();
-    }
-
-  function navWithTenant(path, extra='') {
-    const t = new URLSearchParams(location.search).get('t') || localStorage.getItem('tenant') || '';
-    const sep = path.includes('?') ? '&' : '?';
-    return t ? `${path}${sep}t=${encodeURIComponent(t)}${extra}` : `${path}${extra}`;
-  }
-  // persist tenant (so Part_B / Part_A keep it)
-  (function(){
-    const t = new URLSearchParams(location.search).get('t');
-    if (t) try { localStorage.setItem('tenant', t); } catch {}
-  })();
+  function navWithScope(path) { return withScope(path); }
 
   /* ---------------- page logic ---------------- */
   const $ = s => document.querySelector(s);
@@ -274,9 +118,8 @@
     }
   }
 
-  /* ---------- Helpers to render ---------- */
+  /* ---------- Normalisers ---------- */
 
-  // Build rows from /api/scores/summary payload: { weekly: [...], seasonTotals: [...] }
   function rowsFromSummary(payload){
     if (!payload) return [];
     const weekly = Array.isArray(payload.weekly) ? payload.weekly : [];
@@ -284,20 +127,19 @@
     const totalsMap = new Map(
       totalsArr.map(t => [String(t.player_id), Number(t.totalPoints ?? t.total ?? 0)])
     );
-    // keep weekly order (week points desc), but season total comes from totalsMap
     return weekly.map(r => ({
+      id: String(r.player_id ?? r.id ?? r.player ?? r.name ?? ''),
       name: (r.player ?? r.name ?? r.player_name ?? '').trim(),
       week: Number(r.weekPoints ?? r.week_points ?? r.week ?? 0),
       total: totalsMap.get(String(r.player_id)) ?? Number(r.seasonTotal ?? r.total ?? r.weekPoints ?? 0)
     }));
   }
 
-  // Fallback normaliser (for legacy /api/scores preview or /compute payloads)
   function normaliseScores(payload){
     if (!payload) return [];
     if (Array.isArray(payload.weekly)) {
-      // compute payload already includes weekly[] and we added seasonTotal per player
       return payload.weekly.map(r => ({
+        id: String(r.player_id ?? r.id ?? r.player ?? r.name ?? ''),
         name: r.player || r.name || r.player_name || '',
         week: Number(r.weekPoints ?? r.week_points ?? r.week ?? 0),
         total: Number(r.seasonTotal ?? r.total ?? 0),
@@ -305,6 +147,7 @@
     }
     if (Array.isArray(payload)) {
       return payload.map(r => ({
+        id: String(r.player_id ?? r.id ?? r.player ?? r.name ?? ''),
         name: r.name || r.player || r.player_name || '',
         week: Number(r.week_points ?? r.week ?? r.points ?? 0),
         total: Number(r.season_total ?? r.total ?? r.cumulative ?? r.sum ?? (r.week_points ?? 0)),
@@ -314,6 +157,147 @@
     return Array.isArray(rows) ? normaliseScores(rows) : [];
   }
 
+  /* ---------- Details breakdown helpers ---------- */
+
+  function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
+
+  function fmtLine(lines){
+    if(!lines) return '';
+    const s = Number.isFinite(lines.spread_line) ? `Spread: ${lines.spread_line}` : '';
+    const t = Number.isFinite(lines.total_line)  ? `Total: ${lines.total_line}`   : '';
+    return [s,t].filter(Boolean).join(' • ');
+  }
+  function fmtRes(r){ return r.result ? `Final: ${r.result.home}-${r.result.away}` : '<em>Pending</em>'; }
+  function inferSpreadPick(r){
+    if (!r.lines || !Number.isFinite(r.lines.spread_line)) return null;
+    if (!r.prediction || !Number.isInteger(r.prediction.exact_home) || !Number.isInteger(r.prediction.exact_away)) return null;
+    const m = (r.prediction.exact_home + r.lines.spread_line) - r.prediction.exact_away;
+    return m>0?'HOME':m<0?'AWAY':null;
+  }
+  function inferTotalPick(r){
+    if (!r.lines || !Number.isFinite(r.lines.total_line)) return null;
+    if (!r.prediction || !Number.isInteger(r.prediction.exact_home) || !Number.isInteger(r.prediction.exact_away)) return null;
+    const sum = r.prediction.exact_home + r.prediction.exact_away;
+    return sum>r.lines.total_line?'OVER':sum<r.lines.total_line?'UNDER':null;
+  }
+  function fmtPred(r, spreadPick, totalPick){
+    if (!r.prediction) return '<em>(no prediction)</em>';
+    const parts=[];
+    if (Number.isInteger(r.prediction.exact_home) && Number.isInteger(r.prediction.exact_away))
+      parts.push(`Pred: ${r.prediction.exact_home}-${r.prediction.exact_away}`);
+    if (r.prediction.winner) parts.push(`Winner: ${r.prediction.winner}`);
+    if (spreadPick) parts.push(`ATS: ${spreadPick}`);
+    if (totalPick)  parts.push(`O/U: ${totalPick}`);
+    return parts.join(' • ');
+  }
+
+  function computeBreakdown(r){
+    const fx = r.lines || {};
+    const res = r.result || null;
+    const pred = r.prediction || {};
+
+    const out = { winner:0, ats:0, ou:0, exact:0 };
+    if (!res) return out; // no result yet
+
+    // Winner (+2)
+    let winnerPick = pred.winner;
+    if (!winnerPick && Number.isInteger(pred.exact_home) && Number.isInteger(pred.exact_away)) {
+      if (pred.exact_home !== pred.exact_away) {
+        winnerPick = pred.exact_home > pred.exact_away ? 'HOME' : 'AWAY';
+      }
+    }
+    const homeWon = res.home > res.away;
+    const winnerHit = winnerPick && ((winnerPick === 'HOME' && homeWon) || (winnerPick === 'AWAY' && !homeWon));
+    if (winnerHit) out.winner = 2;
+
+    // ATS (+1) — infer pick from numeric prediction if absent
+    let spreadPick = pred.spread_pick;
+    if (!spreadPick && typeof fx.spread_line === 'number' &&
+        Number.isInteger(pred.exact_home) && Number.isInteger(pred.exact_away)) {
+      const pm = (pred.exact_home + fx.spread_line) - pred.exact_away;
+      spreadPick = pm > 0 ? 'HOME' : pm < 0 ? 'AWAY' : null;
+    }
+    if (typeof fx.spread_line === 'number' && spreadPick) {
+      const m = (res.home + fx.spread_line) - res.away;
+      const homeCovers = m > 0; // push ignored
+      const atsHit = (homeCovers && spreadPick === 'HOME') || (!homeCovers && spreadPick === 'AWAY');
+      if (atsHit) out.ats = 1;
+    }
+
+    // O/U (+1) — infer pick from numeric prediction if absent
+    let totalPick = pred.total_pick;
+    if (!totalPick && typeof fx.total_line === 'number' &&
+        Number.isInteger(pred.exact_home) && Number.isInteger(pred.exact_away)) {
+      const psum = pred.exact_home + pred.exact_away;
+      totalPick = psum > fx.total_line ? 'OVER' : psum < fx.total_line ? 'UNDER' : null;
+    }
+    if (typeof fx.total_line === 'number' && totalPick) {
+      const sum = res.home + res.away;
+      const over = sum > fx.total_line; // push ignored
+      const ouHit = (over && totalPick === 'OVER') || (!over && totalPick === 'UNDER');
+      if (ouHit) out.ou = 1;
+    }
+
+    // Exact (+2)
+    const gaveExact = Number.isInteger(pred.exact_home) && Number.isInteger(pred.exact_away);
+    if (gaveExact && pred.exact_home === res.home && pred.exact_away === res.away) out.exact = 2;
+
+    return out;
+  }
+
+  function renderBreakdownRow(r){
+    const spreadPick = r.prediction?.spread_pick ?? inferSpreadPick(r);
+    const totalPick  = r.prediction?.total_pick  ?? inferTotalPick(r);
+
+    const b = computeBreakdown(r);
+
+    return `
+      <div class="mm8-row">
+        <div class="mm8-match"><strong>${esc(r.homeTeam)}</strong> vs <strong>${esc(r.awayTeam)}</strong></div>
+        <div class="mm8-lines">${fmtLine(r.lines)}</div>
+        <div class="mm8-pred">${fmtPred(r, spreadPick, totalPick)}</div>
+        <div class="mm8-res">${fmtRes(r)}</div>
+        <div class="mm8-points">
+          <span class="${b.winner?'ok':'no'}">Winner${b.winner?'+2':''}</span>
+          ${spreadPick?`<span class="${b.ats?'ok':'no'}">ATS${b.ats?'+1':''}</span>`:''}
+          ${totalPick?`<span class="${b.ou?'ok':'no'}">O/U${b.ou?'+1':''}</span>`:''}
+          <span class="${b.exact?'ok':'no'}">Exact${b.exact?'+2':''}</span>
+          <b>${(r.points ?? (b.winner+b.ats+b.ou+b.exact))} pts</b>
+        </div>
+      </div>`;
+  }
+
+  async function openDetailsModalByName(playerName, week){
+    const url = new URL('/api/scores/player-week', location.origin);
+    url.searchParams.set('week', String(week));
+    url.searchParams.set('name', playerName);
+    if (TENANT) url.searchParams.set('t', TENANT);
+    if (COMP)   url.searchParams.set('c', COMP);
+
+    const res = await fetch(url.toString(), { cache:'no-store' });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'failed');
+
+    const rows = data.rows || [];
+    const overlay = document.createElement('div');
+    overlay.className = 'mm8-overlay';
+    overlay.innerHTML = `
+      <div class="mm8-modal">
+        <div class="mm8-modal-header">
+          <strong>${esc(data.player?.name || playerName)}</strong> — Week ${data.week} • ${data.totals?.weekPoints ?? 0} pts
+          <button class="mm8-close" aria-label="Close">×</button>
+        </div>
+        <div class="mm8-modal-body">
+          ${rows.map(renderBreakdownRow).join('')}
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.mm8-close').onclick = () => overlay.remove();
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  }
+
+  /* ---------- Render table ---------- */
+
   function renderRows(rows){
     tbody.innerHTML = '';
     if (!rows.length) {
@@ -321,12 +305,22 @@
       return;
     }
     empty.style.display = 'none';
+
     rows.forEach(r=>{
       const tr = document.createElement('tr');
       tr.innerHTML = `
-        <td>${r.name ?? ''}</td>
+        <td>${esc(r.name ?? '')}</td>
         <td class="right">${Number.isFinite(+r.week) ? +r.week : ''}</td>
-        <td class="right">${Number.isFinite(+r.total) ? +r.total : ''}</td>`;
+        <td class="right">${Number.isFinite(+r.total) ? +r.total : ''}</td>
+        <td class="right"><button class="mm8-btn">Details ▸</button></td>`;
+      const btn = tr.querySelector('button.mm8-btn');
+      btn.addEventListener('click', async () => {
+        try {
+          await openDetailsModalByName(r.name, clampWeek());
+        } catch (e) {
+          alert('Failed to load breakdown');
+        }
+      });
       tbody.appendChild(tr);
     });
   }
@@ -383,7 +377,6 @@
       }
       if (!resp || !resp.ok) throw new Error(resp ? `${resp.status} ${resp.statusText}` : 'network');
 
-      // We *could* display resp.weekly, but we want cumulative → re-run preview()
       ok(`✅ Scores computed for week ${w}`);
       await preview();
     }catch(e){
@@ -394,7 +387,7 @@
   // Wire-up
   $('#btnPreview').addEventListener('click', preview);
   $('#btnCompute').addEventListener('click', compute);
-  $('#btnSeason').addEventListener('click', ()=> location.href = navWithTenant('/Part_E_Season.html'));
+  $('#btnSeason').addEventListener('click', ()=> location.href = navWithScope('/Part_E_Season.html'));
   weekInput.addEventListener('change', ()=> { clampWeek(); preview(); });
 
   (async function init(){
@@ -402,7 +395,7 @@
     await preview();
   })();
   </script>
+
   <script src="/js/tenant.js"></script>
 </body>
 </html>
-
