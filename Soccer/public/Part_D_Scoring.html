@@ -18,6 +18,11 @@
     .mm8-points span.ok{background:#e9f8ee;border-color:#b7e2c3}
     .mm8-points span.no{background:#fbeaea;border-color:#f1c1c1}
     .mm8-points b{margin-left:.5rem}
+
+    /* Table tweaks */
+    td.right, th.right { text-align: right; }
+    td.mono { font-variant-numeric: tabular-nums; }
+    .dim { opacity: .6; }
   </style>
 </head>
 
@@ -47,8 +52,12 @@
         <thead>
           <tr>
             <th>Player</th>
-            <th>Week Points</th>
-            <th>Season Total</th>
+            <th class="right">Winner<br><span class="dim">(+2 ea)</span></th>
+            <th class="right">ATS<br><span class="dim">(+1 ea)</span></th>
+            <th class="right">O/U<br><span class="dim">(+1 ea)</span></th>
+            <th class="right">Exact<br><span class="dim">(+2 ea)</span></th>
+            <th class="right">Week Points</th>
+            <th class="right">Season Total</th>
             <th>Details</th>
           </tr>
         </thead>
@@ -113,13 +122,10 @@
       const startW = Number.isFinite(urlW) ? urlW : (Number(cfg.current_week) || 1);
       weekInput.value = startW;
       clampWeek();
-    }catch{
-      // defaults
-    }
+    }catch{}
   }
 
   /* ---------- Normalisers ---------- */
-
   function rowsFromSummary(payload){
     if (!payload) return [];
     const weekly = Array.isArray(payload.weekly) ? payload.weekly : [];
@@ -157,10 +163,88 @@
     return Array.isArray(rows) ? normaliseScores(rows) : [];
   }
 
-  /* ---------- Details breakdown helpers ---------- */
-
+  /* ---------- Breakdown helpers (match → category points) ---------- */
   function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
 
+  function computeBreakdown(r){
+    const fx = r.lines || {};
+    const res = r.result || null;
+    const pred = r.prediction || {};
+    const out = { winner:0, ats:0, ou:0, exact:0 };
+    if (!res) return out;
+
+    // Winner (+2)
+    let winnerPick = pred.winner;
+    if (!winnerPick && Number.isInteger(pred.exact_home) && Number.isInteger(pred.exact_away)) {
+      if (pred.exact_home !== pred.exact_away) {
+        winnerPick = pred.exact_home > pred.exact_away ? 'HOME' : 'AWAY';
+      }
+    }
+    const homeWon = res.home > res.away;
+    if (winnerPick && ((winnerPick === 'HOME' && homeWon) || (winnerPick === 'AWAY' && !homeWon))) {
+      out.winner = 2;
+    }
+
+    // ATS (+1) — infer pick from numeric prediction if absent
+    let spreadPick = pred.spread_pick;
+    if (!spreadPick && typeof fx.spread_line === 'number' &&
+        Number.isInteger(pred.exact_home) && Number.isInteger(pred.exact_away)) {
+      const pm = (pred.exact_home + fx.spread_line) - pred.exact_away;
+      spreadPick = pm > 0 ? 'HOME' : pm < 0 ? 'AWAY' : null;
+    }
+    if (typeof fx.spread_line === 'number' && spreadPick) {
+      const m = (res.home + fx.spread_line) - res.away;
+      const homeCovers = m > 0; // push ignored
+      if ((homeCovers && spreadPick === 'HOME') || (!homeCovers && spreadPick === 'AWAY')) out.ats = 1;
+    }
+
+    // O/U (+1) — infer pick from numeric prediction if absent
+    let totalPick = pred.total_pick;
+    if (!totalPick && typeof fx.total_line === 'number' &&
+        Number.isInteger(pred.exact_home) && Number.isInteger(pred.exact_away)) {
+      const psum = pred.exact_home + pred.exact_away;
+      totalPick = psum > fx.total_line ? 'OVER' : psum < fx.total_line ? 'UNDER' : null;
+    }
+    if (typeof fx.total_line === 'number' && totalPick) {
+      const sum = res.home + res.away;
+      const over = sum > fx.total_line; // push ignored
+      if ((over && totalPick === 'OVER') || (!over && totalPick === 'UNDER')) out.ou = 1;
+    }
+
+    // Exact (+2)
+    if (Number.isInteger(pred.exact_home) && Number.isInteger(pred.exact_away) &&
+        pred.exact_home === res.home && pred.exact_away === res.away) out.exact = 2;
+
+    return out;
+  }
+
+  function aggregateWeekTotals(rows){
+    const acc = { w:0, ats:0, ou:0, ex:0, total:0 };
+    for (const r of rows || []) {
+      const b = computeBreakdown(r);
+      acc.w   += b.winner;
+      acc.ats += b.ats;
+      acc.ou  += b.ou;
+      acc.ex  += b.exact;
+      acc.total += (r.points ?? (b.winner + b.ats + b.ou + b.exact));
+    }
+    return acc;
+  }
+
+  async function fetchPlayerWeekByName(name, week){
+    const url = new URL('/api/scores/player-week', location.origin);
+    url.searchParams.set('week', String(week));
+    url.searchParams.set('name', name);
+    if (TENANT) url.searchParams.set('t', TENANT);
+    if (COMP)   url.searchParams.set('c', COMP);
+    const res = await fetch(url.toString(), { cache:'no-store' });
+    if (!res.ok) throw new Error(res.statusText);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'player-week failed');
+    return data;
+  }
+
+  /* ---------- Details modal (unchanged UX) ---------- */
   function fmtLine(lines){
     if(!lines) return '';
     const s = Number.isFinite(lines.spread_line) ? `Spread: ${lines.spread_line}` : '';
@@ -190,67 +274,10 @@
     if (totalPick)  parts.push(`O/U: ${totalPick}`);
     return parts.join(' • ');
   }
-
-  function computeBreakdown(r){
-    const fx = r.lines || {};
-    const res = r.result || null;
-    const pred = r.prediction || {};
-
-    const out = { winner:0, ats:0, ou:0, exact:0 };
-    if (!res) return out; // no result yet
-
-    // Winner (+2)
-    let winnerPick = pred.winner;
-    if (!winnerPick && Number.isInteger(pred.exact_home) && Number.isInteger(pred.exact_away)) {
-      if (pred.exact_home !== pred.exact_away) {
-        winnerPick = pred.exact_home > pred.exact_away ? 'HOME' : 'AWAY';
-      }
-    }
-    const homeWon = res.home > res.away;
-    const winnerHit = winnerPick && ((winnerPick === 'HOME' && homeWon) || (winnerPick === 'AWAY' && !homeWon));
-    if (winnerHit) out.winner = 2;
-
-    // ATS (+1) — infer pick from numeric prediction if absent
-    let spreadPick = pred.spread_pick;
-    if (!spreadPick && typeof fx.spread_line === 'number' &&
-        Number.isInteger(pred.exact_home) && Number.isInteger(pred.exact_away)) {
-      const pm = (pred.exact_home + fx.spread_line) - pred.exact_away;
-      spreadPick = pm > 0 ? 'HOME' : pm < 0 ? 'AWAY' : null;
-    }
-    if (typeof fx.spread_line === 'number' && spreadPick) {
-      const m = (res.home + fx.spread_line) - res.away;
-      const homeCovers = m > 0; // push ignored
-      const atsHit = (homeCovers && spreadPick === 'HOME') || (!homeCovers && spreadPick === 'AWAY');
-      if (atsHit) out.ats = 1;
-    }
-
-    // O/U (+1) — infer pick from numeric prediction if absent
-    let totalPick = pred.total_pick;
-    if (!totalPick && typeof fx.total_line === 'number' &&
-        Number.isInteger(pred.exact_home) && Number.isInteger(pred.exact_away)) {
-      const psum = pred.exact_home + pred.exact_away;
-      totalPick = psum > fx.total_line ? 'OVER' : psum < fx.total_line ? 'UNDER' : null;
-    }
-    if (typeof fx.total_line === 'number' && totalPick) {
-      const sum = res.home + res.away;
-      const over = sum > fx.total_line; // push ignored
-      const ouHit = (over && totalPick === 'OVER') || (!over && totalPick === 'UNDER');
-      if (ouHit) out.ou = 1;
-    }
-
-    // Exact (+2)
-    const gaveExact = Number.isInteger(pred.exact_home) && Number.isInteger(pred.exact_away);
-    if (gaveExact && pred.exact_home === res.home && pred.exact_away === res.away) out.exact = 2;
-
-    return out;
-  }
-
   function renderBreakdownRow(r){
     const spreadPick = r.prediction?.spread_pick ?? inferSpreadPick(r);
     const totalPick  = r.prediction?.total_pick  ?? inferTotalPick(r);
-
     const b = computeBreakdown(r);
-
     return `
       <div class="mm8-row">
         <div class="mm8-match"><strong>${esc(r.homeTeam)}</strong> vs <strong>${esc(r.awayTeam)}</strong></div>
@@ -266,18 +293,8 @@
         </div>
       </div>`;
   }
-
   async function openDetailsModalByName(playerName, week){
-    const url = new URL('/api/scores/player-week', location.origin);
-    url.searchParams.set('week', String(week));
-    url.searchParams.set('name', playerName);
-    if (TENANT) url.searchParams.set('t', TENANT);
-    if (COMP)   url.searchParams.set('c', COMP);
-
-    const res = await fetch(url.toString(), { cache:'no-store' });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error || 'failed');
-
+    const data = await fetchPlayerWeekByName(playerName, week);
     const rows = data.rows || [];
     const overlay = document.createElement('div');
     overlay.className = 'mm8-overlay';
@@ -296,33 +313,60 @@
     overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
   }
 
-  /* ---------- Render table ---------- */
-
+  /* ---------- Render table with category totals ---------- */
   function renderRows(rows){
     tbody.innerHTML = '';
-    if (!rows.length) {
-      empty.style.display = 'block';
-      return;
-    }
+    if (!rows.length) { empty.style.display = 'block'; return; }
     empty.style.display = 'none';
 
     rows.forEach(r=>{
       const tr = document.createElement('tr');
+      tr.dataset.name = r.name || '';
       tr.innerHTML = `
         <td>${esc(r.name ?? '')}</td>
-        <td class="right">${Number.isFinite(+r.week) ? +r.week : ''}</td>
-        <td class="right">${Number.isFinite(+r.total) ? +r.total : ''}</td>
+        <td class="right mono" data-col="w">…</td>
+        <td class="right mono" data-col="ats">…</td>
+        <td class="right mono" data-col="ou">…</td>
+        <td class="right mono" data-col="ex">…</td>
+        <td class="right mono" data-col="week">${Number.isFinite(+r.week) ? +r.week : ''}</td>
+        <td class="right mono">${Number.isFinite(+r.total) ? +r.total : ''}</td>
         <td class="right"><button class="mm8-btn">Details ▸</button></td>`;
       const btn = tr.querySelector('button.mm8-btn');
       btn.addEventListener('click', async () => {
-        try {
-          await openDetailsModalByName(r.name, clampWeek());
-        } catch (e) {
-          alert('Failed to load breakdown');
-        }
+        try { await openDetailsModalByName(r.name, clampWeek()); } catch { alert('Failed to load breakdown'); }
       });
       tbody.appendChild(tr);
     });
+
+    // After base rows render, fetch & fill per-week category totals per player
+    fillCategoryTotalsForAll(rows.map(r => r.name));
+  }
+
+  async function fillCategoryTotalsForAll(names){
+    const week = clampWeek();
+    await Promise.all(names.map(async (name) => {
+      const tr = tbody.querySelector(`tr[data-name="${CSS.escape(name)}"]`);
+      if (!tr) return;
+      try {
+        const data = await fetchPlayerWeekByName(name, week);
+        const agg = aggregateWeekTotals(data.rows || []);
+        tr.querySelector('[data-col="w"]').textContent   = agg.w;
+        tr.querySelector('[data-col="ats"]').textContent = agg.ats;
+        tr.querySelector('[data-col="ou"]').textContent  = agg.ou;
+        tr.querySelector('[data-col="ex"]').textContent  = agg.ex;
+
+        // If server's weekly points differ from summary (shouldn't), sync to be safe
+        const weekCell = tr.querySelector('[data-col="week"]');
+        const totalFromCats = agg.w + agg.ats + agg.ou + agg.ex;
+        const shown = Number(weekCell.textContent || 0);
+        if (Number.isFinite(totalFromCats) && totalFromCats !== shown) {
+          weekCell.textContent = totalFromCats;
+        }
+      } catch {
+        // If fetch fails, set zeros to avoid dangling ellipses
+        ['w','ats','ou','ex'].forEach(k => tr.querySelector(`[data-col="${k}"]`).textContent = '0');
+      }
+    }));
   }
 
   /* ---------- Preview using /summary (cumulative totals) ---------- */
@@ -338,7 +382,7 @@
           const data1 = await r1.json().catch(()=> ({}));
           rows = rowsFromSummary(data1);
         }
-      }catch{ /* ignore; will fall back */ }
+      }catch{}
 
       // Fallback to legacy preview if needed
       if (!rows.length) {
