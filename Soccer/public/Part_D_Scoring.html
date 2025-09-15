@@ -6,6 +6,166 @@
   <title>Scoring — MatchM8</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
+
+<style>
+/* Details UI (lightweight, no deps) */
+.mm8-btn{padding:.25rem .5rem;border:1px solid #ddd;border-radius:.5rem;background:#f7f7f7;cursor:pointer}
+.mm8-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;z-index:9999}
+.mm8-modal{background:#fff;max-width:900px;width:90%;border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.2);overflow:hidden}
+.mm8-modal-header{display:flex;justify-content:space-between;gap:1rem;padding:.75rem 1rem;border-bottom:1px solid #eee}
+.mm8-modal-body{padding:1rem;display:flex;flex-direction:column;gap:.75rem;max-height:70vh;overflow:auto}
+.mm8-row{display:grid;grid-template-columns:1.2fr .9fr .9fr .6fr .9fr;gap:.5rem;align-items:center;padding:.5rem;border:1px solid #f0f0f0;border-radius:.75rem}
+.mm8-points span{margin-right:.5rem;font-size:.85rem;padding:.1rem .35rem;border-radius:.5rem;border:1px solid #ddd}
+.mm8-points span.ok{background:#e9f8ee;border-color:#b7e2c3}
+.mm8-points span.no{background:#fbeaea;border-color:#f1c1c1}
+.mm8-points b{margin-left:.5rem}
+</style>
+
+<script>
+(function(){
+  const qs=new URLSearchParams(location.search);
+  const tenant=qs.get('t')||'default';
+  const comp=qs.get('c')||'';
+  const week=Number(qs.get('week'))||1;
+
+  // Find the main standings table on the page
+  const table=document.querySelector('table');
+  if(!table) return;
+
+  // Add "Details" header
+  const thead=table.tHead || table.querySelector('thead');
+  if(thead && thead.rows[0]) {
+    const th=document.createElement('th'); th.textContent='Details';
+    thead.rows[0].appendChild(th);
+  }
+
+  // For each row, add a "View" button that opens a per-match breakdown
+  const tbody=table.tBodies[0] || table.querySelector('tbody');
+  if(!tbody) return;
+  [...tbody.rows].forEach(tr => {
+    const nameCell=tr.cells[0] || tr.querySelector('td'); // assume first cell is Player name
+    const playerName=nameCell?.textContent?.trim();
+    const td=document.createElement('td');
+    const btn=document.createElement('button'); btn.textContent='View'; btn.className='mm8-btn';
+    td.appendChild(btn); tr.appendChild(td);
+
+    btn.addEventListener('click', async () => {
+      try{
+        // We can resolve by name thanks to the server-side finder
+        const url = `/api/scores/player-week?week=${week}&name=${encodeURIComponent(playerName)}&t=${encodeURIComponent(tenant)}&c=${encodeURIComponent(comp)}`;
+        const res=await fetch(url); const data=await res.json();
+        if (!data.ok) throw new Error(data.error || 'failed');
+        showBreakdownModal(data);
+      }catch(e){ alert('Failed to load breakdown');}
+    });
+  });
+
+  function showBreakdownModal(data){
+    const rows = data.rows || [];
+    const overlay=document.createElement('div');
+    overlay.className='mm8-overlay';
+    overlay.innerHTML = `
+      <div class="mm8-modal">
+        <div class="mm8-modal-header">
+          <strong>${data.player?.name || 'Player'}</strong> — Week ${data.week} • ${data.totals?.weekPoints ?? 0} pts
+          <button class="mm8-close" aria-label="Close">×</button>
+        </div>
+        <div class="mm8-modal-body">
+          ${rows.map(r => renderRow(r)).join('')}
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.mm8-close').onclick = () => overlay.remove();
+    overlay.addEventListener('click', e => { if (e.target===overlay) overlay.remove(); });
+  }
+
+  function renderRow(r){
+    // infer picks if user only entered numeric prediction (matches server scoring)
+    const spreadPick = r.prediction?.spread_pick ?? inferSpreadPick(r);
+    const totalPick  = r.prediction?.total_pick  ?? inferTotalPick(r);
+
+    const gotWinner = (function(){
+      if (!r.result || !r.prediction) return false;
+      const homeWon = r.result.home > r.result.away;
+      if (r.prediction.winner === 'HOME') return homeWon;
+      if (r.prediction.winner === 'AWAY') return !homeWon;
+      if (Number.isInteger(r.prediction.exact_home) && Number.isInteger(r.prediction.exact_away)) {
+        if (r.prediction.exact_home === r.prediction.exact_away) return false; // no draws in basketball
+        return (r.prediction.exact_home > r.prediction.exact_away) === homeWon;
+      }
+      return false;
+    })();
+
+    const gotSpread = (function(){
+      if (!r.result || !Number.isFinite(r?.lines?.spread_line) || !spreadPick) return false;
+      const margin = (r.result.home + r.lines.spread_line) - r.result.away;
+      if (margin === 0) return false; // push
+      const homeCovers = margin > 0;
+      return (homeCovers && spreadPick === 'HOME') || (!homeCovers && spreadPick === 'AWAY');
+    })();
+
+    const gotTotal = (function(){
+      if (!r.result || !Number.isFinite(r?.lines?.total_line) || !totalPick) return false;
+      const sum = r.result.home + r.result.away;
+      if (sum === r.lines.total_line) return false; // push
+      const isOver = sum > r.lines.total_line;
+      return (isOver && totalPick === 'OVER') || (!isOver && totalPick === 'UNDER');
+    })();
+
+    const gotExact = !!(r.result && r.prediction
+      && Number.isInteger(r.prediction.exact_home)
+      && Number.isInteger(r.prediction.exact_away)
+      && r.prediction.exact_home === r.result.home
+      && r.prediction.exact_away === r.result.away);
+
+    return `
+      <div class="mm8-row">
+        <div class="mm8-match"><strong>${r.homeTeam}</strong> vs <strong>${r.awayTeam}</strong></div>
+        <div class="mm8-lines">${fmtLine(r.lines)}</div>
+        <div class="mm8-pred">${fmtPred(r, spreadPick, totalPick)}</div>
+        <div class="mm8-res">${fmtRes(r)}</div>
+        <div class="mm8-points">
+          <span class="${gotWinner?'ok':'no'}">Winner${gotWinner?'+2':''}</span>
+          ${spreadPick?`<span class="${gotSpread?'ok':'no'}">ATS${gotSpread?'+1':''}</span>`:''}
+          ${totalPick?`<span class="${gotTotal?'ok':'no'}">O/U${gotTotal?'+1':''}</span>`:''}
+          <span class="${gotExact?'ok':'no'}">Exact${gotExact?'+2':''}</span>
+          <b>${r.points ?? 0} pts</b>
+        </div>
+      </div>`;
+  }
+
+  function fmtLine(lines){
+    if(!lines) return '';
+    const s = Number.isFinite(lines.spread_line) ? `Spread: ${lines.spread_line}` : '';
+    const t = Number.isFinite(lines.total_line)  ? `Total: ${lines.total_line}`   : '';
+    return [s,t].filter(Boolean).join(' • ');
+  }
+  function fmtPred(r, spreadPick, totalPick){
+    if (!r.prediction) return '<em>(no prediction)</em>';
+    const parts=[];
+    if (Number.isInteger(r.prediction.exact_home) && Number.isInteger(r.prediction.exact_away))
+      parts.push(`Pred: ${r.prediction.exact_home}-${r.prediction.exact_away}`);
+    if (r.prediction.winner) parts.push(`Winner: ${r.prediction.winner}`);
+    if (spreadPick) parts.push(`ATS: ${spreadPick}`);
+    if (totalPick)  parts.push(`O/U: ${totalPick}`);
+    return parts.join(' • ');
+  }
+  function fmtRes(r){ return r.result ? `Final: ${r.result.home}-${r.result.away}` : '<em>Pending</em>'; }
+  function inferSpreadPick(r){
+    if (!r.lines || !Number.isFinite(r.lines.spread_line)) return null;
+    if (!r.prediction || !Number.isInteger(r.prediction.exact_home) || !Number.isInteger(r.prediction.exact_away)) return null;
+    const m = (r.prediction.exact_home + r.lines.spread_line) - r.prediction.exact_away;
+    return m>0?'HOME':m<0?'AWAY':null;
+  }
+  function inferTotalPick(r){
+    if (!r.lines || !Number.isFinite(r.lines.total_line)) return null;
+    if (!r.prediction || !Number.isInteger(r.prediction.exact_home) || !Number.isInteger(r.prediction.exact_away)) return null;
+    const sum = r.prediction.exact_home + r.prediction.exact_away;
+    return sum>r.lines.total_line?'OVER':sum<r.lines.total_line?'UNDER':null;
+  }
+})();
+</script>
+
 <body>
   <div id="hero" data-page="Scoring"></div>
   <script src="/hero.js" defer></script>

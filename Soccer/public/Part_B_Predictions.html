@@ -32,6 +32,18 @@
       display:inline-block;
     }
 
+    <style>
+/* Make prediction score inputs comfortably wide for 3 digits */
+input[type="number"], input.score, .score-input {
+  min-width: 6ch;           /* fits 3-digit numbers */
+  padding: .25rem .4rem;
+  font-size: 16px;          /* avoids iOS zoom */
+  text-align: center;
+  box-sizing: content-box;  /* keep ch width predictable */
+}
+</style>
+
+
     /* --- (optional) grid version kept for later tidy-ups --- */
     .match-grid {
       display: grid;
