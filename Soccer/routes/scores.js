@@ -192,12 +192,32 @@ function computeSoccerPoints(pred, actual) {
   return predOutcome === realOutcome ? 1 : 0;
 }
 
-// Basketball basic: +2 correct winner, +1 spread side, +1 total side, +2 exact (push = 0)
+// Basketball basic: +2 winner, +1 spread side, +1 total side, +2 exact (push = 0)
+// Now also INFERS spread/total picks from the user's numeric prediction if not explicitly provided.
 function computeBasketballPoints(pred, actual, fx) {
   if (!actual) return 0;
   let pts = 0;
 
-  // Winner (+2)
+  // Did the user give numeric predictions? (exact_* already normalised from home/away when present)
+  const gaveExactNums = Number.isInteger(pred.exact_home) && Number.isInteger(pred.exact_away);
+
+  // Derive implicit ATS/O-U picks if missing
+  const spread = fx?.spread_line;
+  const totalLine = fx?.total_line;
+
+  let spreadPick = pred.spread_pick; // 'HOME' | 'AWAY' | null
+  if (!spreadPick && typeof spread === 'number' && gaveExactNums) {
+    const predictedMarginVsLine = (pred.exact_home + spread) - pred.exact_away; // home perspective
+    spreadPick = predictedMarginVsLine > 0 ? 'HOME' : predictedMarginVsLine < 0 ? 'AWAY' : null; // push => null
+  }
+
+  let totalPick = pred.total_pick; // 'OVER' | 'UNDER' | null
+  if (!totalPick && typeof totalLine === 'number' && gaveExactNums) {
+    const predictedSum = pred.exact_home + pred.exact_away;
+    totalPick = predictedSum > totalLine ? 'OVER' : predictedSum < totalLine ? 'UNDER' : null; // push => null
+  }
+
+  // Winner (+2) — winner already inferred earlier from numbers, but respect explicit value if present
   if (pred.winner) {
     const homeWon = actual.home > actual.away;
     if ((pred.winner === 'HOME' && homeWon) || (pred.winner === 'AWAY' && !homeWon)) {
@@ -205,29 +225,26 @@ function computeBasketballPoints(pred, actual, fx) {
     }
   }
 
-  // Spread (+1) — requires fixture spread_line and a user pick; push (== 0) yields 0
-  const spread = fx?.spread_line;
-  if (typeof spread === 'number' && pred.spread_pick) {
+  // Spread (+1) — push yields 0
+  if (typeof spread === 'number' && spreadPick) {
     const margin = (actual.home + spread) - actual.away; // home perspective
-    const homeCovers = margin > 0; // push ignored
-    if ((homeCovers && pred.spread_pick === 'HOME') || (!homeCovers && pred.spread_pick === 'AWAY')) {
+    const homeCovers = margin > 0;
+    if ((homeCovers && spreadPick === 'HOME') || (!homeCovers && spreadPick === 'AWAY')) {
       pts += 1;
     }
   }
 
-  // Total (+1) — requires fixture total_line and a user pick; push (==) yields 0
-  const totalLine = fx?.total_line;
-  if (typeof totalLine === 'number' && pred.total_pick) {
+  // Total (+1) — push yields 0
+  if (typeof totalLine === 'number' && totalPick) {
     const sum = actual.home + actual.away;
-    const isOver = sum > totalLine; // push ignored
-    if ((isOver && pred.total_pick === 'OVER') || (!isOver && pred.total_pick === 'UNDER')) {
+    const isOver = sum > totalLine;
+    if ((isOver && totalPick === 'OVER') || (!isOver && totalPick === 'UNDER')) {
       pts += 1;
     }
   }
 
-  // Exact (+2) — only if user provided exact numbers
-  const gaveExact = Number.isInteger(pred.exact_home) && Number.isInteger(pred.exact_away);
-  if (gaveExact && pred.exact_home === actual.home && pred.exact_away === actual.away) {
+  // Exact (+2)
+  if (gaveExactNums && pred.exact_home === actual.home && pred.exact_away === actual.away) {
     pts += 2;
   }
 
