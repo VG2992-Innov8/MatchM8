@@ -14,7 +14,18 @@
     .match .no{width:26px;text-align:right}
     .match .team{min-width:120px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .match .sep{margin:0 8px}
-    .match input.pred{width:56px;text-align:center}
+
+    /* Bigger prediction inputs (fits 3-digit scores) */
+    .match input.pred,
+    input[type="number"].pred,
+    input.score,
+    .score-input {
+      min-width: 6ch;           /* ~3 digits + spacing */
+      padding: 6px 8px;
+      font-size: 16px;          /* avoids iOS zoom */
+      text-align: center;
+      box-sizing: content-box;  /* keep ch width predictable */
+    }
 
     /* --- Inline Results + Points widget --- */
     .rpw-wrap{display:inline-flex;align-items:center;gap:6px;margin-left:10px;flex:0 0 auto;white-space:nowrap}
@@ -31,18 +42,6 @@
       font-variant-numeric:tabular-nums;
       display:inline-block;
     }
-
-    <style>
-/* Make prediction score inputs comfortably wide for 3 digits */
-input[type="number"], input.score, .score-input {
-  min-width: 6ch;           /* fits 3-digit numbers */
-  padding: .25rem .4rem;
-  font-size: 16px;          /* avoids iOS zoom */
-  text-align: center;
-  box-sizing: content-box;  /* keep ch width predictable */
-}
-</style>
-
 
     /* --- (optional) grid version kept for later tidy-ups --- */
     .match-grid {
@@ -86,36 +85,19 @@ input[type="number"], input.score, .score-input {
   </main>
 
   <script>
-    // simple helper kept from your draft (optional)
-    async function saveWeek(week, picks) {
-      // picks = [{ id: "EPL-2025-W1-M1", home: 3, away: 1 }, ...]
-      const out = await MM8.predictions.submit(week, picks);
-      console.log('Saved', out);
-      alert('Predictions saved!');
-    }
-  </script>
+    /* ---------------- scope helpers (tenant + competition) ---------------- */
+    const PAGE_QS = new URLSearchParams(location.search);
+    const TENANT = PAGE_QS.get('t') || localStorage.getItem('tenant') || '';
+    const COMP   = (PAGE_QS.get('c') || localStorage.getItem('comp') || '').trim();
+    if (TENANT) { try { localStorage.setItem('tenant', TENANT); } catch {} }
+    if (COMP)   { try { localStorage.setItem('comp', COMP); } catch {} }
 
-  <script>
-    /* ---------------- tenant helper (used everywhere) ---------------- */
     function withScope(url) {
       const u = new URL(url, location.origin);
-      const t = new URLSearchParams(location.search).get('t') || localStorage.getItem('tenant') || '';
-      if (t) u.searchParams.set('t', t);
+      if (TENANT) u.searchParams.set('t', TENANT);
+      if (COMP)   u.searchParams.set('c', COMP);
       return u.toString();
     }
-
-    // >>> Competition helper (NEW) <<<
-    const COMP = (new URLSearchParams(location.search).get('c') || localStorage.getItem('comp') || '').trim();
-    if (COMP) { try { localStorage.setItem('comp', COMP); } catch {} }
-    function withScope(url){
-      const u = new URL(withScope(url), location.origin);
-      if (COMP) u.searchParams.set('c', COMP);
-      return u.toString();
-    }
-
-    // persist tenant for this tab/session
-    const TENANT = new URLSearchParams(location.search).get('t') || localStorage.getItem('tenant') || '';
-    if (TENANT) localStorage.setItem('tenant', TENANT);
 
     // ------- config -------
     let TOTAL_WEEKS = 38;
@@ -180,8 +162,18 @@ input[type="number"], input.score, .score-input {
         const res = await fetch(withScope(`/api/fixtures?week=${encodeURIComponent(week)}`), {cache:'no-store'});
         if(!res.ok) return [];
         const data = await res.json();
-        const list = Array.isArray(data) ? data : (Array.isArray(data.fixtures) ? data.fixtures : []);
-        return Array.isArray(list) ? list : [];
+        // Support both array and {id:{...}} shapes
+        const list = Array.isArray(data) ? data
+                  : Array.isArray(data.fixtures) ? data.fixtures
+                  : (data && typeof data === 'object') ? Object.entries(data).map(([id, v]) => ({ id, ...v }))
+                  : [];
+        // normalise team names
+        return list.map((m, i) => ({
+          id: m.id || m.matchId || m.code || String(i+1),
+          home: m.home || m.homeTeam || m.home_team || 'Home',
+          away: m.away || m.awayTeam || m.away_team || 'Away',
+          kickoffISO: m.kickoffISO || m.kickoff_iso || m.kickoff || m.tipoff_utc || null
+        }));
       }catch{
         return [];
       }
@@ -201,16 +193,16 @@ input[type="number"], input.score, .score-input {
       noFxMsg.style.display = 'none';
 
       lastFixtures.forEach((fx, i) => {
-        const ko = fx.kickoff_iso || fx.kickoffISO || fx.kickoff || null;
+        const ko = fx.kickoffISO || null;
         const row = document.createElement('div');
         row.className = 'match';
         row.innerHTML = `
           <div class="line" data-id="${fx.id}" data-ko="${ko||''}">
             <div class="no">${i+1}</div>
             <div class="team">${fx.home}</div>
-            <input class="pred" type="number" min="0" inputmode="numeric" aria-label="${fx.home} goals">
+            <input class="pred" type="number" min="0" inputmode="numeric" aria-label="${fx.home} score">
             <span class="sep">–</span>
-            <input class="pred" type="number" min="0" inputmode="numeric" aria-label="${fx.away} goals">
+            <input class="pred" type="number" min="0" inputmode="numeric" aria-label="${fx.away} score">
             <div class="team">${fx.away}</div>
 
             <!-- Inline Results + Points -->
@@ -458,4 +450,3 @@ input[type="number"], input.score, .score-input {
   <script src="/js/tenant.js"></script>
 </body>
 </html>
-
