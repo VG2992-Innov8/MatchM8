@@ -10,7 +10,7 @@
     .muted{opacity:.6}
 
     /* --- One-line match rows --- */
-    .match .line{display:flex;align-items:center;gap:10px;flex-wrap:nowrap}
+    .match .line{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
     .match .no{width:26px;text-align:right}
     .match .team{min-width:120px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .match .sep{margin:0 8px}
@@ -26,6 +26,17 @@
       text-align: center;
       box-sizing: content-box;  /* keep ch width predictable */
     }
+
+    /* Pick controls (Winner / ATS / O-U) */
+    .pick-wrap { display:flex; align-items:center; gap:8px; flex-wrap:wrap }
+    .pick-wrap label { font-size: .9rem; opacity: .8 }
+    .pick-wrap select {
+      padding: 6px 8px;
+      border: 1px solid var(--border, #d1d5db);
+      border-radius: 8px;
+      background: #fff;
+    }
+    .linespill { font-size:.9rem; opacity:.7; }
 
     /* --- Inline Results + Points widget --- */
     .rpw-wrap{display:inline-flex;align-items:center;gap:6px;margin-left:10px;flex:0 0 auto;white-space:nowrap}
@@ -135,6 +146,9 @@
         const [h,a]=line.querySelectorAll('input.pred');
         if (h) h.value = '';
         if (a) a.value = '';
+        const selW = line.querySelector('select.pick-winner'); if (selW) selW.value = '';
+        const selA = line.querySelector('select.pick-ats');    if (selA) selA.value = '';
+        const selT = line.querySelector('select.pick-ou');     if (selT) selT.value = '';
       });
     }
 
@@ -163,17 +177,23 @@
         if(!res.ok) return [];
         const data = await res.json();
         // Support both array and {id:{...}} shapes
-        const list = Array.isArray(data) ? data
+        const listRaw = Array.isArray(data) ? data
                   : Array.isArray(data.fixtures) ? data.fixtures
                   : (data && typeof data === 'object') ? Object.entries(data).map(([id, v]) => ({ id, ...v }))
                   : [];
-        // normalise team names
-        return list.map((m, i) => ({
-          id: m.id || m.matchId || m.code || String(i+1),
-          home: m.home || m.homeTeam || m.home_team || 'Home',
-          away: m.away || m.awayTeam || m.away_team || 'Away',
-          kickoffISO: m.kickoffISO || m.kickoff_iso || m.kickoff || m.tipoff_utc || null
-        }));
+        // normalise names + optional betting lines
+        return listRaw.map((m, i) => {
+          const spread = Number(m.spread_line ?? m.spreadLine ?? m.line ?? m.home_spread ?? m.spread);
+          const total  = Number(m.total_line  ?? m.totalLine  ?? m.over_under  ?? m.total);
+          return {
+            id: m.id || m.matchId || m.code || String(i+1),
+            home: m.home?.name ?? m.home ?? m.homeTeam ?? m.home_team ?? 'Home',
+            away: m.away?.name ?? m.away ?? m.awayTeam ?? m.away_team ?? 'Away',
+            kickoffISO: m.kickoffISO || m.kickoff_iso || m.kickoff || m.tipoff_utc || null,
+            spread_line: Number.isFinite(spread) ? spread : null,
+            total_line: Number.isFinite(total) ? total : null
+          };
+        });
       }catch{
         return [];
       }
@@ -196,6 +216,8 @@
         const ko = fx.kickoffISO || null;
         const row = document.createElement('div');
         row.className = 'match';
+        const hasATS = Number.isFinite(fx.spread_line);
+        const hasOU  = Number.isFinite(fx.total_line);
         row.innerHTML = `
           <div class="line" data-id="${fx.id}" data-ko="${ko||''}">
             <div class="no">${i+1}</div>
@@ -204,6 +226,38 @@
             <span class="sep">–</span>
             <input class="pred" type="number" min="0" inputmode="numeric" aria-label="${fx.away} score">
             <div class="team">${fx.away}</div>
+
+            <!-- Pick controls -->
+            <div class="pick-wrap" style="margin-left:6px">
+              <label>Winner
+                <select class="pick pick-winner" aria-label="Winner pick">
+                  <option value="">—</option>
+                  <option value="HOME">HOME</option>
+                  <option value="AWAY">AWAY</option>
+                </select>
+              </label>
+              ${hasATS ? `
+                <label>ATS
+                  <select class="pick pick-ats" aria-label="Against the Spread">
+                    <option value="">—</option>
+                    <option value="HOME">HOME</option>
+                    <option value="AWAY">AWAY</option>
+                  </select>
+                </label>` : `<span class="muted">ATS n/a</span>`}
+              ${hasOU ? `
+                <label>O/U
+                  <select class="pick pick-ou" aria-label="Over or Under">
+                    <option value="">—</option>
+                    <option value="OVER">OVER</option>
+                    <option value="UNDER">UNDER</option>
+                  </select>
+                </label>` : `<span class="muted">O/U n/a</span>`}
+              ${(hasATS || hasOU) ? `<span class="linespill">`
+                + (hasATS ? `Spread: ${fx.spread_line}` : '')
+                + (hasATS && hasOU ? ' • ' : '')
+                + (hasOU ? `Total: ${fx.total_line}` : '')
+                + `</span>` : ''}
+            </div>
 
             <!-- Inline Results + Points -->
             <span class="rpw-wrap" data-match-id="${fx.id}">
@@ -239,6 +293,9 @@
         const [h,a]=line.querySelectorAll('input.pred');
         if (h) h.value = (p.home == null) ? '' : p.home;
         if (a) a.value = (p.away == null) ? '' : p.away;
+        const selW = line.querySelector('select.pick-winner'); if (selW) selW.value = (p.winner || '');
+        const selA = line.querySelector('select.pick-ats');    if (selA) selA.value = (p.spread_pick || p.spreadPick || '');
+        const selT = line.querySelector('select.pick-ou');     if (selT) selT.value = (p.total_pick || p.totalPick || p.over_under || '');
       });
     }
 
@@ -267,11 +324,18 @@
       let anyEditable = false;
       lines.forEach(line=>{
         const [h,a]=line.querySelectorAll('input.pred');
+        const selW = line.querySelector('select.pick-winner');
+        const selA = line.querySelector('select.pick-ats');
+        const selT = line.querySelector('select.pick-ou');
         const tag = line.querySelector('.lock-pill');
         const koMs = Date.parse(line.dataset.ko || '') || NaN;
 
         const locked = allLock || (DEADLINE_MODE === 'per_match' && Number.isFinite(koMs) && isLockedByTime(koMs));
-        h.disabled = a.disabled = locked;
+        if (h) h.disabled = locked;
+        if (a) a.disabled = locked;
+        if (selW) selW.disabled = locked;
+        if (selA) selA.disabled = locked;
+        if (selT) selT.disabled = locked;
         tag.style.display = locked ? 'inline-flex' : 'none';
 
         if (!locked) anyEditable = true;
@@ -299,12 +363,25 @@
 
       // Build predictions, skipping locked rows
       const predictions = Array.from(lines).map(line=>{
-        const [h,a]=line.querySelectorAll('input.pred');
-        if (h.disabled || a.disabled) return null;
+        const [h,a] = line.querySelectorAll('input.pred');
+        const selW  = line.querySelector('select.pick-winner');
+        const selA  = line.querySelector('select.pick-ats');
+        const selT  = line.querySelector('select.pick-ou');
+
+        // if any inputs are disabled for this line, consider the row locked/uneditable
+        const locked = (h && h.disabled) || (a && a.disabled)
+                    || (selW && selW.disabled) || (selA && selA.disabled) || (selT && selT.disabled);
+        if (locked) return null;
+
+        const winner = selW ? (selW.value || null) : null;
+        const spread_pick = selA ? (selA.value || null) : null;
+        const total_pick  = selT ? (selT.value || null) : null;
+
         return {
           id: line.dataset.id,
-          home: h.value === '' ? null : Number(h.value),
-          away: a.value === '' ? null : Number(a.value)
+          home: h ? (h.value === '' ? null : Number(h.value)) : null,
+          away: a ? (a.value === '' ? null : Number(a.value)) : null,
+          winner, spread_pick, total_pick
         };
       }).filter(Boolean);
 
