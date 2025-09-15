@@ -353,6 +353,16 @@ app.use(tenantMiddleware);
 app.get('/health', (_req, res) => res.json({ ok: true, mode: APP_MODE, ts: Date.now() }));
 app.get('/healthz', (_req, res) => res.status(200).send('ok'));
 
+// 🔎 Version (branch/commit) — quick deploy verification
+app.get('/api/version', (_req, res) => {
+  res.json({
+    ok: true,
+    branch: process.env.RENDER_GIT_BRANCH || null,
+    commit: (process.env.RENDER_GIT_COMMIT || '').slice(0, 7) || null,
+    when: new Date().toISOString()
+  });
+});
+
 // Quick meta
 app.get('/api/__meta', (req, res) => {
   res.json({
