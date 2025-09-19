@@ -21,14 +21,18 @@
       text-align:center;
       padding:.35rem .5rem;
       font-size:16px;         /* avoid iOS zoom */
-      flex:0 0 auto;          /* never stretch */
+      flex:0 0 auto;
       box-sizing:border-box;
     }
 
-    /* Winner select */
-    .pick-winner{
-      padding:.3rem .5rem;
-      font-size:14px;
+    /* Small “pill” controls for derived picks */
+    .pill {
+      display:inline-flex; align-items:center; gap:6px;
+      padding:2px 8px; border:1px solid var(--border,#d0d7de);
+      border-radius:999px; font-size:12px; background:#f7fafc;
+    }
+    .pill select {
+      padding:.2rem .4rem; font-size:13px;
     }
 
     /* Inline Results + Points widget */
@@ -47,14 +51,7 @@
       display:inline-block;
     }
 
-    /* Tiny badges next to winner/ATS/OU labels */
-    .pill {
-      display:inline-flex; align-items:center; gap:4px;
-      padding:2px 6px; border:1px solid var(--border,#d0d7de);
-      border-radius:999px; font-size:12px; background:#f7fafc;
-    }
-
-    /* Small helper note under the controls */
+    /* Helper note under the controls */
     .legend { margin-top:10px; font-size:13px; line-height:1.35 }
     .legend b { font-weight:600 }
     .legend code { background:#f4f4f4; padding:0 .25rem; border-radius:4px }
@@ -65,7 +62,7 @@
   <script src="/hero.js" defer></script>
 
   <main class="container wide">
-    <!-- Identity header (loaded once, mounted here) -->
+    <!-- Identity header -->
     <script src="/js/mm8-ident.js"></script>
     <div id="mm8-ident"></div>
     <script>MM8 && MM8.ident && MM8.ident.mount('#mm8-ident');</script>
@@ -86,12 +83,12 @@
       <!-- Congrats banner (last-week winners) -->
       <div id="winCongrats" class="banner ok" style="display:none;margin-top:12px;"></div>
 
-      <!-- Clear legend: how points work & what n/a means -->
+      <!-- Clear legend -->
       <div class="legend">
-        <b>How points are scored:</b>
-        Winner <b>(+2)</b>, Against the Spread (ATS) <b>(+1)</b>, Over/Under (O/U) <b>(+1)</b>, Exact score <b>(+2)</b>.<br>
-        If a fixture has no betting line, ATS or O/U shows <code>n/a</code>. If you leave ATS/O/U blank, we
-        <em>infer</em> them from your exact score prediction (when a line exists). You can also pick the Winner explicitly.
+        Enter your predicted <b>Home</b> and <b>Away</b> scores. We auto-calculate:
+        <b>Over/Under (O/U)</b> vs the total line, <b>Match Winner</b>, and
+        <b>Points Spread (ATS)</b> vs the spread line. If a fixture has no line,
+        ATS or O/U shows <code>n/a</code>. These derived boxes are read-only.
       </div>
     </div>
 
@@ -148,8 +145,12 @@
         const [h,a]=line.querySelectorAll('input.pred');
         if (h) h.value = '';
         if (a) a.value = '';
-        const sel = line.querySelector('.pick-winner');
-        if (sel) sel.value = '';
+        const w = line.querySelector('.auto-winner');
+        const ou = line.querySelector('.auto-ou');
+        const ats = line.querySelector('.auto-ats');
+        if (w) w.value = '';
+        if (ou) ou.value = 'NA';
+        if (ats) ats.value = 'NA';
       });
     }
 
@@ -184,25 +185,51 @@
           home: m.home?.name ?? m.home ?? m.homeTeam ?? m.home_team ?? 'Home',
           away: m.away?.name ?? m.away ?? m.awayTeam ?? m.away_team ?? 'Away',
           kickoff: m.kickoffISO ?? m.kickoff_iso ?? m.kickoff ?? m.utcDate ?? null,
-          spread: Number.isFinite(+m.spread_line ?? NaN) ? +m.spread_line
-                : Number.isFinite(+m.line ?? NaN) ? +m.line
-                : Number.isFinite(+m.home_spread ?? NaN) ? +m.home_spread
-                : (Number.isFinite(+m.spread ?? NaN) ? +m.spread : null),
-          total: Number.isFinite(+m.total_line ?? NaN) ? +m.total_line
-               : (Number.isFinite(+m.over_under ?? NaN) ? +m.over_under
-               : (Number.isFinite(+m.total ?? NaN) ? +m.total : null))
+          spread: (Number.isFinite(+m.spread_line) ? +m.spread_line
+                : Number.isFinite(+m.line) ? +m.line
+                : Number.isFinite(+m.home_spread) ? +m.home_spread
+                : Number.isFinite(+m.spread) ? +m.spread : null),
+          total: (Number.isFinite(+m.total_line) ? +m.total_line
+               : Number.isFinite(+m.over_under) ? +m.over_under
+               : Number.isFinite(+m.total) ? +m.total : null)
         }));
       }catch{ return []; }
     }
 
-    function rowLegend(spread, total){
-      const ats = (spread==null)
-        ? `<span class="pill" title="ATS (Against the Spread) is not available for this fixture.">ATS n/a</span>`
-        : `<span class="pill" title="ATS: we infer HOME/AWAY from your predicted score using the listed spread.">ATS ${spread}</span>`;
-      const ou = (total==null)
-        ? `<span class="pill" title="Over/Under is not available for this fixture.">O/U n/a</span>`
-        : `<span class="pill" title="O/U: we infer OVER/UNDER from your predicted score using the total line.">O/U ${total}</span>`;
-      return `${ats} &nbsp; ${ou}`;
+    function rowControlsHTML(fx){
+      const spreadInfo = (fx.spread==null) ? 'n/a' : fx.spread;
+      const totalInfo  = (fx.total==null) ? 'n/a' : fx.total;
+      return `
+        <!-- Order requested: O/U, Winner, ATS -->
+        <span class="pill" title="Over/Under vs line (${totalInfo})">
+          <span>O/U</span>
+          <select class="auto-ou" disabled>
+            <option value="NA">${fx.total==null?'n/a':'(auto)'}</option>
+            <option value="OVER">OVER</option>
+            <option value="UNDER">UNDER</option>
+            <option value="PUSH">PUSH</option>
+          </select>
+        </span>
+
+        <span class="pill" title="Match winner inferred from your predicted scores">
+          <span>Winner</span>
+          <select class="auto-winner" disabled>
+            <option value="">(auto)</option>
+            <option value="HOME">HOME</option>
+            <option value="AWAY">AWAY</option>
+          </select>
+        </span>
+
+        <span class="pill" title="Against the Spread vs line (${spreadInfo})">
+          <span>ATS</span>
+          <select class="auto-ats" disabled>
+            <option value="NA">${fx.spread==null?'n/a':'(auto)'}</option>
+            <option value="HOME">HOME</option>
+            <option value="AWAY">AWAY</option>
+            <option value="PUSH">PUSH</option>
+          </select>
+        </span>
+      `;
     }
 
     function render(fixtures){
@@ -222,7 +249,11 @@
         const row = document.createElement('div');
         row.className = 'match';
         row.innerHTML = `
-          <div class="line" data-id="${fx.id}" data-ko="${fx.kickoff||''}">
+          <div class="line"
+               data-id="${fx.id}"
+               data-ko="${fx.kickoff||''}"
+               data-spread="${fx.spread ?? 'NA'}"
+               data-total="${fx.total ?? 'NA'}">
             <div class="no">${i+1}</div>
             <div class="team">${fx.home}</div>
             <input class="pred" type="number" min="0" inputmode="numeric" aria-label="${fx.home} score">
@@ -230,18 +261,7 @@
             <input class="pred" type="number" min="0" inputmode="numeric" aria-label="${fx.away} score">
             <div class="team">${fx.away}</div>
 
-            <!-- Winner picker (optional) -->
-            <span class="pill">
-              <span>Winner</span>
-              <select class="pick-winner" aria-label="Winner">
-                <option value="">(infer)</option>
-                <option value="HOME">HOME</option>
-                <option value="AWAY">AWAY</option>
-              </select>
-            </span>
-
-            <!-- Lines info (ATS / O/U) with tooltips -->
-            ${rowLegend(fx.spread, fx.total)}
+            ${rowControlsHTML(fx)}
 
             <!-- Inline Results + Points -->
             <span class="rpw-wrap" data-match-id="${fx.id}">
@@ -257,6 +277,7 @@
 
       // after render, restore local predictions and then apply locking/results
       restoreLocal();
+      attachAutoUpdaters();       // watch score inputs and keep derived picks in sync
       applyLocks();               // initial pass
       populateResults();          // initial results fill
 
@@ -267,6 +288,68 @@
       resultsTimer = setInterval(populateResults, 20_000); // refresh results every 20s
     }
 
+    /* ---------- Derivations ---------- */
+    function parseMaybeNumber(v){
+      if (v === '' || v == null) return NaN;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : NaN;
+    }
+    function readLineNumbers(line){
+      const sRaw = line.dataset.spread;
+      const tRaw = line.dataset.total;
+      const spread = (sRaw==='NA'||sRaw===''||sRaw==null) ? null : Number(sRaw);
+      const total  = (tRaw==='NA'||tRaw===''||tRaw==null) ? null : Number(tRaw);
+      return { spread, total };
+    }
+    function inferWinner(h,a){
+      if (!Number.isFinite(h) || !Number.isFinite(a)) return '';
+      if (h === a) return ''; // basketball has no draws; don't force
+      return (h > a) ? 'HOME' : 'AWAY';
+    }
+    function inferOU(h,a,total){
+      if (total == null || !Number.isFinite(total)) return 'NA';
+      if (!Number.isFinite(h) || !Number.isFinite(a)) return 'NA'; // keep as n/a until both entered
+      const sum = h + a;
+      if (sum === total) return 'PUSH';
+      return (sum > total) ? 'OVER' : 'UNDER';
+    }
+    function inferATS(h,a,spread){
+      if (spread == null || !Number.isFinite(spread)) return 'NA';
+      if (!Number.isFinite(h) || !Number.isFinite(a)) return 'NA';
+      const margin = (h + spread) - a; // home perspective
+      if (margin === 0) return 'PUSH';
+      return margin > 0 ? 'HOME' : 'AWAY';
+    }
+    function updateDerived(line){
+      const [hEl,aEl]=line.querySelectorAll('input.pred');
+      const { spread, total } = readLineNumbers(line);
+      const h = parseMaybeNumber(hEl.value);
+      const a = parseMaybeNumber(aEl.value);
+
+      const w  = inferWinner(h,a);
+      const ou = inferOU(h,a,total);
+      const ats= inferATS(h,a,spread);
+
+      const wSel  = line.querySelector('.auto-winner');
+      const ouSel = line.querySelector('.auto-ou');
+      const atsSel= line.querySelector('.auto-ats');
+
+      if (wSel)  wSel.value  = w || '';
+      if (ouSel) ouSel.value = ou;
+      if (atsSel)atsSel.value= ats;
+    }
+    function attachAutoUpdaters(){
+      document.querySelectorAll('.line').forEach(line=>{
+        const [hEl,aEl]=line.querySelectorAll('input.pred');
+        const onChange = ()=> updateDerived(line);
+        hEl.addEventListener('input', onChange);
+        aEl.addEventListener('input', onChange);
+        // initial compute
+        updateDerived(line);
+      });
+    }
+
+    /* ---------- Restore local ---------- */
     function restoreLocal(){
       const week = Number(weekInput.value);
       clearPredInputs();
@@ -277,17 +360,15 @@
         const [h,a]=line.querySelectorAll('input.pred');
         if (h) h.value = (p.home == null) ? '' : p.home;
         if (a) a.value = (p.away == null) ? '' : p.away;
-        const sel=line.querySelector('.pick-winner');
-        if (sel && (p.winner === 'HOME' || p.winner === 'AWAY' || p.winner === '')) sel.value = p.winner || '';
       });
     }
 
+    /* ---------- Locks ---------- */
     function isLockedByTime(koMillis){
       if (!koMillis) return false; // unknown kickoff => don’t lock on time
       const lockTime = koMillis - LOCK_MINS * 60_000;
       return Date.now() >= lockTime;
     }
-
     function applyLocks(){
       const lines = Array.from(document.querySelectorAll('.line'));
       if (!lines.length) { saveBtn.disabled = true; return; }
@@ -307,12 +388,11 @@
       let anyEditable = false;
       lines.forEach(line=>{
         const [h,a]=line.querySelectorAll('input.pred');
-        const sel = line.querySelector('.pick-winner');
         const tag = line.querySelector('.lock-pill');
         const koMs = Date.parse(line.dataset.ko || '') || NaN;
 
         const locked = allLock || (DEADLINE_MODE === 'per_match' && Number.isFinite(koMs) && isLockedByTime(koMs));
-        h.disabled = a.disabled = sel.disabled = locked;
+        h.disabled = a.disabled = locked;      // derived selects are disabled anyway
         tag.style.display = locked ? 'inline-flex' : 'none';
 
         if (!locked) anyEditable = true;
@@ -322,6 +402,7 @@
       saveBtn.disabled = !anyEditable;
     }
 
+    /* ---------- Load / Save ---------- */
     async function load(){
       weekInput.value = clamp(Number(weekInput.value || 1));
       setWeekLabel();
@@ -341,19 +422,27 @@
       // Build predictions, skipping locked rows
       const predictions = Array.from(lines).map(line=>{
         const [h,a]=line.querySelectorAll('input.pred');
-        const sel = line.querySelector('.pick-winner');
         if (h.disabled || a.disabled) return null;
-        const winner = sel?.value || ''; // '' means infer
-        return {
+
+        const winner = (line.querySelector('.auto-winner')?.value || '');
+        const ouPick = (line.querySelector('.auto-ou')?.value || '');
+        const atsPick= (line.querySelector('.auto-ats')?.value || '');
+
+        const out = {
           id: line.dataset.id,
           home: h.value === '' ? null : Number(h.value),
-          away: a.value === '' ? null : Number(a.value),
-          ...(winner ? { winner } : {})
-          // ATS/O-U are inferred from scores server-side; nothing to send here
+          away: a.value === '' ? null : Number(a.value)
         };
+
+        // Only include picks that actually score (+ ignore NA/PUSH)
+        if (winner === 'HOME' || winner === 'AWAY') out.winner = winner;
+        if (ouPick === 'OVER' || ouPick === 'UNDER') out.total_pick = ouPick;
+        if (atsPick === 'HOME' || atsPick === 'AWAY') out.spread_pick = atsPick;
+
+        return out;
       }).filter(Boolean);
 
-      // Keep a local backup scoped to season+week+player
+      // local backup
       localStorage.setItem(storageKey(week), JSON.stringify(predictions));
 
       // include player_id (from login)
@@ -374,7 +463,7 @@
       b.style.display='block'; setTimeout(()=>b.style.display='none',1400);
     }
 
-    // --- Results inline population (scores route if available, else plain /api/results) ---
+    /* ---------- Inline results widget ---------- */
     function getIdentity(){
       const s = window.localStorage || {};
       const qs = new URLSearchParams(location.search);
@@ -456,7 +545,7 @@
       });
     }
 
-    // ---- Last-week winners congrats (uses matrix to find most recent week) ----
+    /* ---------- Last-week winners congrats ---------- */
     async function showLastWeekWinnerCongrats(){
       const box = document.getElementById('winCongrats');
       if (!box) return;
@@ -489,7 +578,7 @@
       box.style.display = 'block';
     }
 
-    // ---- wires ----
+    /* ---------- wires ---------- */
     document.getElementById('load').addEventListener('click', load);
     document.getElementById('save').addEventListener('click', save);
     weekInput.addEventListener('change', () => {
