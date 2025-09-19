@@ -25,15 +25,13 @@
       box-sizing:border-box;
     }
 
-    /* Small “pill” controls for derived picks */
+    /* Small “pill” control for derived winner */
     .pill {
       display:inline-flex; align-items:center; gap:6px;
       padding:2px 8px; border:1px solid var(--border,#d0d7de);
       border-radius:999px; font-size:12px; background:#f7fafc;
     }
-    .pill select {
-      padding:.2rem .4rem; font-size:13px;
-    }
+    .pill select { padding:.2rem .4rem; font-size:13px; }
 
     /* Inline Results + Points widget */
     .rpw-wrap{display:inline-flex;align-items:center;gap:6px;margin-left:10px;flex:0 0 auto;white-space:nowrap}
@@ -54,7 +52,6 @@
     /* Helper note under the controls */
     .legend { margin-top:10px; font-size:13px; line-height:1.35 }
     .legend b { font-weight:600 }
-    .legend code { background:#f4f4f4; padding:0 .25rem; border-radius:4px }
   </style>
 </head>
 <body>
@@ -85,10 +82,8 @@
 
       <!-- Clear legend -->
       <div class="legend">
-        Enter your predicted <b>Home</b> and <b>Away</b> scores. We auto-calculate:
-        <b>Over/Under (O/U)</b> vs the total line, <b>Match Winner</b>, and
-        <b>Points Spread (ATS)</b> vs the spread line. If a fixture has no line,
-        ATS or O/U shows <code>n/a</code>. These derived boxes are read-only.
+        Enter your predicted <b>Home</b> and <b>Away</b> scores. The <b>Match Winner</b> is
+        <b>automatically inferred</b> from your scores (no draws in basketball). That’s all you need.
       </div>
     </div>
 
@@ -146,11 +141,7 @@
         if (h) h.value = '';
         if (a) a.value = '';
         const w = line.querySelector('.auto-winner');
-        const ou = line.querySelector('.auto-ou');
-        const ats = line.querySelector('.auto-ats');
         if (w) w.value = '';
-        if (ou) ou.value = 'NA';
-        if (ats) ats.value = 'NA';
       });
     }
 
@@ -179,57 +170,26 @@
         if(!res.ok) return [];
         const data = await res.json();
         const list = Array.isArray(data) ? data : (Array.isArray(data.fixtures) ? data.fixtures : []);
-        // normalize names/ids/lines
+        // normalize names/ids
         return (Array.isArray(list)?list:[]).map((m,i)=>({
           id: String(m.id ?? m.matchId ?? m.code ?? i+1),
           home: m.home?.name ?? m.home ?? m.homeTeam ?? m.home_team ?? 'Home',
           away: m.away?.name ?? m.away ?? m.awayTeam ?? m.away_team ?? 'Away',
-          kickoff: m.kickoffISO ?? m.kickoff_iso ?? m.kickoff ?? m.utcDate ?? null,
-          spread: (Number.isFinite(+m.spread_line) ? +m.spread_line
-                : Number.isFinite(+m.line) ? +m.line
-                : Number.isFinite(+m.home_spread) ? +m.home_spread
-                : Number.isFinite(+m.spread) ? +m.spread : null),
-          total: (Number.isFinite(+m.total_line) ? +m.total_line
-               : Number.isFinite(+m.over_under) ? +m.over_under
-               : Number.isFinite(+m.total) ? +m.total : null)
+          kickoff: m.kickoffISO ?? m.kickoff_iso ?? m.kickoff ?? m.utcDate ?? null
         }));
       }catch{ return []; }
     }
 
-    function rowControlsHTML(fx){
-      const spreadInfo = (fx.spread==null) ? 'n/a' : fx.spread;
-      const totalInfo  = (fx.total==null) ? 'n/a' : fx.total;
+    function winnerPillHTML(){
       return `
-        <!-- Order requested: O/U, Winner, ATS -->
-        <span class="pill" title="Over/Under vs line (${totalInfo})">
-          <span>O/U</span>
-          <select class="auto-ou" disabled>
-            <option value="NA">${fx.total==null?'n/a':'(auto)'}</option>
-            <option value="OVER">OVER</option>
-            <option value="UNDER">UNDER</option>
-            <option value="PUSH">PUSH</option>
-          </select>
-        </span>
-
-        <span class="pill" title="Match winner inferred from your predicted scores">
+        <span class="pill" title="Match winner is inferred from your predicted scores">
           <span>Winner</span>
           <select class="auto-winner" disabled>
             <option value="">(auto)</option>
             <option value="HOME">HOME</option>
             <option value="AWAY">AWAY</option>
           </select>
-        </span>
-
-        <span class="pill" title="Against the Spread vs line (${spreadInfo})">
-          <span>ATS</span>
-          <select class="auto-ats" disabled>
-            <option value="NA">${fx.spread==null?'n/a':'(auto)'}</option>
-            <option value="HOME">HOME</option>
-            <option value="AWAY">AWAY</option>
-            <option value="PUSH">PUSH</option>
-          </select>
-        </span>
-      `;
+        </span>`;
     }
 
     function render(fixtures){
@@ -251,9 +211,7 @@
         row.innerHTML = `
           <div class="line"
                data-id="${fx.id}"
-               data-ko="${fx.kickoff||''}"
-               data-spread="${fx.spread ?? 'NA'}"
-               data-total="${fx.total ?? 'NA'}">
+               data-ko="${fx.kickoff||''}">
             <div class="no">${i+1}</div>
             <div class="team">${fx.home}</div>
             <input class="pred" type="number" min="0" inputmode="numeric" aria-label="${fx.home} score">
@@ -261,7 +219,7 @@
             <input class="pred" type="number" min="0" inputmode="numeric" aria-label="${fx.away} score">
             <div class="team">${fx.away}</div>
 
-            ${rowControlsHTML(fx)}
+            ${winnerPillHTML()}
 
             <!-- Inline Results + Points -->
             <span class="rpw-wrap" data-match-id="${fx.id}">
@@ -277,7 +235,7 @@
 
       // after render, restore local predictions and then apply locking/results
       restoreLocal();
-      attachAutoUpdaters();       // watch score inputs and keep derived picks in sync
+      attachAutoUpdaters();       // watch score inputs and keep winner in sync
       applyLocks();               // initial pass
       populateResults();          // initial results fill
 
@@ -294,58 +252,26 @@
       const n = Number(v);
       return Number.isFinite(n) ? n : NaN;
     }
-    function readLineNumbers(line){
-      const sRaw = line.dataset.spread;
-      const tRaw = line.dataset.total;
-      const spread = (sRaw==='NA'||sRaw===''||sRaw==null) ? null : Number(sRaw);
-      const total  = (tRaw==='NA'||tRaw===''||tRaw==null) ? null : Number(tRaw);
-      return { spread, total };
-    }
     function inferWinner(h,a){
       if (!Number.isFinite(h) || !Number.isFinite(a)) return '';
-      if (h === a) return ''; // basketball has no draws; don't force
+      if (h === a) return ''; // no draws in basketball; leave blank until not tied
       return (h > a) ? 'HOME' : 'AWAY';
     }
-    function inferOU(h,a,total){
-      if (total == null || !Number.isFinite(total)) return 'NA';
-      if (!Number.isFinite(h) || !Number.isFinite(a)) return 'NA'; // keep as n/a until both entered
-      const sum = h + a;
-      if (sum === total) return 'PUSH';
-      return (sum > total) ? 'OVER' : 'UNDER';
-    }
-    function inferATS(h,a,spread){
-      if (spread == null || !Number.isFinite(spread)) return 'NA';
-      if (!Number.isFinite(h) || !Number.isFinite(a)) return 'NA';
-      const margin = (h + spread) - a; // home perspective
-      if (margin === 0) return 'PUSH';
-      return margin > 0 ? 'HOME' : 'AWAY';
-    }
-    function updateDerived(line){
+    function updateWinner(line){
       const [hEl,aEl]=line.querySelectorAll('input.pred');
-      const { spread, total } = readLineNumbers(line);
       const h = parseMaybeNumber(hEl.value);
       const a = parseMaybeNumber(aEl.value);
-
       const w  = inferWinner(h,a);
-      const ou = inferOU(h,a,total);
-      const ats= inferATS(h,a,spread);
-
       const wSel  = line.querySelector('.auto-winner');
-      const ouSel = line.querySelector('.auto-ou');
-      const atsSel= line.querySelector('.auto-ats');
-
       if (wSel)  wSel.value  = w || '';
-      if (ouSel) ouSel.value = ou;
-      if (atsSel)atsSel.value= ats;
     }
     function attachAutoUpdaters(){
       document.querySelectorAll('.line').forEach(line=>{
         const [hEl,aEl]=line.querySelectorAll('input.pred');
-        const onChange = ()=> updateDerived(line);
+        const onChange = ()=> updateWinner(line);
         hEl.addEventListener('input', onChange);
         aEl.addEventListener('input', onChange);
-        // initial compute
-        updateDerived(line);
+        updateWinner(line);
       });
     }
 
@@ -392,7 +318,7 @@
         const koMs = Date.parse(line.dataset.ko || '') || NaN;
 
         const locked = allLock || (DEADLINE_MODE === 'per_match' && Number.isFinite(koMs) && isLockedByTime(koMs));
-        h.disabled = a.disabled = locked;      // derived selects are disabled anyway
+        h.disabled = a.disabled = locked;      // winner select is read-only anyway
         tag.style.display = locked ? 'inline-flex' : 'none';
 
         if (!locked) anyEditable = true;
@@ -425,8 +351,6 @@
         if (h.disabled || a.disabled) return null;
 
         const winner = (line.querySelector('.auto-winner')?.value || '');
-        const ouPick = (line.querySelector('.auto-ou')?.value || '');
-        const atsPick= (line.querySelector('.auto-ats')?.value || '');
 
         const out = {
           id: line.dataset.id,
@@ -434,10 +358,8 @@
           away: a.value === '' ? null : Number(a.value)
         };
 
-        // Only include picks that actually score (+ ignore NA/PUSH)
+        // Include inferred winner if determined (HOME/AWAY)
         if (winner === 'HOME' || winner === 'AWAY') out.winner = winner;
-        if (ouPick === 'OVER' || ouPick === 'UNDER') out.total_pick = ouPick;
-        if (atsPick === 'HOME' || atsPick === 'AWAY') out.spread_pick = atsPick;
 
         return out;
       }).filter(Boolean);
