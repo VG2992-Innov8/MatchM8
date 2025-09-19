@@ -251,10 +251,70 @@ function computeBasketballPoints(pred, actual, fx) {
   return pts;
 }
 
+// Basketball close-to-score mode:
+// - Per-team points depending on distance to actual (exact / within5 / within10)
+// - Optional winner bonus (winnerPoints)
+// rules example:
+// { mode:"basketball_close",
+//   perTeam:{ exact:15, within5:10, within10:5 },
+//   thresholds:{ within5:5, within10:10 },
+//   winnerPoints:0 }
+function computeBasketballClosePoints(pred, actual, rules) {
+  if (!actual) return 0;
+
+  const perTeam = {
+    exact:   Number(rules?.perTeam?.exact)    || 15,
+    within5: Number(rules?.perTeam?.within5)  || 10,
+    within10:Number(rules?.perTeam?.within10) || 5
+  };
+  const thresholds = {
+    within5:  Number(rules?.thresholds?.within5)  || 5,
+    within10: Number(rules?.thresholds?.within10) || 10
+  };
+  const winnerPts = Number(rules?.winnerPoints) || 0;
+
+  const ph = toIntOrNull(pred.exact_home ?? pred.home);
+  const pa = toIntOrNull(pred.exact_away ?? pred.away);
+
+  let pts = 0;
+
+  // Per-team closeness
+  if (Number.isInteger(ph)) {
+    const dh = Math.abs(ph - actual.home);
+    if (dh === 0) pts += perTeam.exact;
+    else if (dh <= thresholds.within5) pts += perTeam.within5;
+    else if (dh <= thresholds.within10) pts += perTeam.within10;
+  }
+  if (Number.isInteger(pa)) {
+    const da = Math.abs(pa - actual.away);
+    if (da === 0) pts += perTeam.exact;
+    else if (da <= thresholds.within5) pts += perTeam.within5;
+    else if (da <= thresholds.within10) pts += perTeam.within10;
+  }
+
+  // Optional winner bonus
+  if (winnerPts > 0) {
+    let predictedWinner = (pred.winner || '').toUpperCase();
+    if (!predictedWinner && Number.isInteger(ph) && Number.isInteger(pa) && ph !== pa) {
+      predictedWinner = ph > pa ? 'HOME' : 'AWAY';
+    }
+    if (predictedWinner) {
+      const homeWon = actual.home > actual.away;
+      const ok = (predictedWinner === 'HOME' && homeWon) || (predictedWinner === 'AWAY' && !homeWon);
+      if (ok) pts += winnerPts;
+    }
+  }
+
+  return pts;
+}
+
 // Select scorer based on rules.json (default to Soccer)
 function getScorer(rules) {
   if (rules && rules.mode === 'basketball_basic') {
     return (p, a, fx) => computeBasketballPoints(p, a, fx);
+  }
+  if (rules && rules.mode === 'basketball_close') {
+    return (p, a, fx) => computeBasketballClosePoints(p, a, rules);
   }
   return (p, a, fx) => computeSoccerPoints(p, a, fx);
 }
@@ -618,17 +678,21 @@ router.get('/player-week', (req, res) => {
       pts = scoreFn(pred, actual, fx);
       weekPoints += pts;
 
-      // Tally details (works for both soccer & basketball)
+      // Tally details (works for both soccer & basketball basic; for close mode, exactCount still counts only perfect exacts)
       const gaveExact = Number.isInteger(pred.exact_home) && Number.isInteger(pred.exact_away);
       if (gaveExact && actual && pred.exact_home === actual.home && pred.exact_away === actual.away) {
         exactCount++;
       } else if (actual) {
-        // Outcome: soccer via numeric outcome; basketball via winner pick
+        // Outcome: soccer via numeric outcome; basketball via winner pick / inferred
         let outcomeOk = false;
-        if (rules && rules.mode === 'basketball_basic') {
-          if (pred.winner) {
+        if (rules && (rules.mode === 'basketball_basic' || rules.mode === 'basketball_close')) {
+          let w = (pred.winner || '').toUpperCase();
+          if (!w && Number.isInteger(pred.exact_home) && Number.isInteger(pred.exact_away) && pred.exact_home !== pred.exact_away) {
+            w = pred.exact_home > pred.exact_away ? 'HOME' : 'AWAY';
+          }
+          if (w) {
             const homeWon = actual.home > actual.away;
-            outcomeOk = (pred.winner === 'HOME' && homeWon) || (pred.winner === 'AWAY' && !homeWon);
+            outcomeOk = (w === 'HOME' && homeWon) || (w === 'AWAY' && !homeWon);
           }
         } else {
           const ph = toIntOrNull(pred.exact_home ?? pred.home);
