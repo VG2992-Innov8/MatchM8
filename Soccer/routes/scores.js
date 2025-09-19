@@ -259,19 +259,20 @@ function computeBasketballPoints(pred, actual, fx) {
 //   perTeam:{ exact:15, within5:10, within10:5 },
 //   thresholds:{ within5:5, within10:10 },
 //   winnerPoints:0 }
+// Basketball close-to-score mode
 function computeBasketballClosePoints(pred, actual, rules) {
   if (!actual) return 0;
 
   const perTeam = {
-    exact:   Number(rules?.perTeam?.exact)    || 15,
-    within5: Number(rules?.perTeam?.within5)  || 10,
-    within10:Number(rules?.perTeam?.within10) || 5
+    exact:    Number(rules?.perTeam?.exact    ?? 15),
+    within5:  Number(rules?.perTeam?.within5  ?? 10),
+    within10: Number(rules?.perTeam?.within10 ?? 5),
   };
   const thresholds = {
-    within5:  Number(rules?.thresholds?.within5)  || 5,
-    within10: Number(rules?.thresholds?.within10) || 10
+    within5:  Number(rules?.thresholds?.within5  ?? 5),
+    within10: Number(rules?.thresholds?.within10 ?? 10),
   };
-  const winnerPts = Number(rules?.winnerPoints) || 0;
+  const winnerPts = Number(rules?.winnerPoints ?? 0);
 
   const ph = toIntOrNull(pred.exact_home ?? pred.home);
   const pa = toIntOrNull(pred.exact_away ?? pred.away);
@@ -282,17 +283,17 @@ function computeBasketballClosePoints(pred, actual, rules) {
   if (Number.isInteger(ph)) {
     const dh = Math.abs(ph - actual.home);
     if (dh === 0) pts += perTeam.exact;
-    else if (dh <= thresholds.within5) pts += perTeam.within5;
+    else if (dh <= thresholds.within5)  pts += perTeam.within5;
     else if (dh <= thresholds.within10) pts += perTeam.within10;
   }
   if (Number.isInteger(pa)) {
     const da = Math.abs(pa - actual.away);
     if (da === 0) pts += perTeam.exact;
-    else if (da <= thresholds.within5) pts += perTeam.within5;
+    else if (da <= thresholds.within5)  pts += perTeam.within5;
     else if (da <= thresholds.within10) pts += perTeam.within10;
   }
 
-  // Optional winner bonus
+  // Optional winner bonus (auto-inferred from predicted scores if not set)
   if (winnerPts > 0) {
     let predictedWinner = (pred.winner || '').toUpperCase();
     if (!predictedWinner && Number.isInteger(ph) && Number.isInteger(pa) && ph !== pa) {
@@ -307,6 +308,14 @@ function computeBasketballClosePoints(pred, actual, rules) {
 
   return pts;
 }
+
+// Make sure getScorer selects it:
+function getScorer(rules) {
+  if (rules?.mode === 'basketball_close')  return (p, a)    => computeBasketballClosePoints(p, a, rules);
+  if (rules?.mode === 'basketball_basic')  return (p, a, f) => computeBasketballPoints(p, a, f);
+  return (p, a) => computeSoccerPoints(p, a);
+}
+
 
 // Select scorer based on rules.json (default to Soccer)
 function getScorer(rules) {
