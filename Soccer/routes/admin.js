@@ -94,6 +94,10 @@ function readTenantConfig(req) {
   try { return JSON.parse(fs.readFileSync(path.join(tenantDir(req), 'config.json'), 'utf8')); }
   catch { return {}; }
 }
+async function writeTenantConfig(req, cfg) {
+  const p = path.join(tenantDir(req), 'config.json');
+  await writeJson(req, p, cfg);
+}
 function getTenantLicenseClaims(req) {
   const cfg = readTenantConfig(req);
   const token  = String(cfg.license_token || '');
@@ -193,6 +197,141 @@ router.get('/health', (req, res) => {
     dataDir: dataDir(req),
     tenantDir: tenantDir(req)
   });
+});
+
+/* ========================= NEW: Regular-season finish & finals switch ========================= */
+
+/** normalize season totals (array or map) into an array of {player_id,name,totalPoints,weeksPlayed} */
+function normalizeSeasonTotals(any) {
+  if (Array.isArray(any)) {
+    return any.map(r => ({
+      player_id: String(r.player_id ?? r.playerId ?? r.id ?? r.name ?? ''),
+      name: String(r.player ?? r.name ?? ''),
+      totalPoints: Number(r.totalPoints ?? r.total ?? r.points ?? 0),
+      weeksPlayed: Number(r.weeksPlayed ?? r.weeks_played ?? 0)
+    }));
+  }
+  if (any && typeof any === 'object') {
+    return Object.entries(any).map(([pid, v]) => ({
+      player_id: String(pid),
+      name: String(v?.name ?? ''),
+      totalPoints: Number(v?.total ?? v?.points ?? 0),
+      weeksPlayed: Number(v?.weeks_played ?? v?.weeksPlayed ?? 0)
+    }));
+  }
+  return [];
+}
+
+/** infer finals competition name from config or convention */
+function inferFinalsCompName(req, currentComp, overrideTo) {
+  if (overrideTo && typeof overrideTo === 'string') return overrideTo.trim();
+
+  const tcfg = readTenantConfig(req);
+  // optional finals block:
+  // "finals": { "enabled": true, "from": "NBL-2025", "to": "NBL-2025-Finals" }
+  const finals = tcfg?.finals;
+  if (finals && finals.to && (!finals.from || finals.from === currentComp)) {
+    return String(finals.to);
+  }
+  // default convention: <comp>-Finals
+  if (currentComp && !String(currentComp).endsWith('-Finals')) {
+    return `${currentComp}-Finals`;
+  }
+  return null;
+}
+
+/** POST /competitions/finish — declare champion(s) for current competition and (optionally) switch defaultCompetition to finals */
+router.post('/competitions/finish', async (req, res) => {
+  try {
+    const curComp = (req.ctx && req.ctx.comp) || null;
+    const seasonCfg = readJsonSync(pJoin(req, 'config.json'), {});
+    const season = Number(seasonCfg?.season || new Date().getFullYear());
+
+    // read season totals from this competition
+    const totalsRaw = readJsonSync(pJoin(req, 'scores', 'season-totals.json'), null);
+    const totals = normalizeSeasonTotals(totalsRaw);
+    if (!totals.length) {
+      return res.status(400).json({ ok:false, error:'no_season_totals', details:'Run /api/scores/compute for each week first.' });
+    }
+
+    // find winners (supports ties)
+    const top = Math.max(...totals.map(t => t.totalPoints));
+    const winners = totals.filter(t => t.totalPoints === top);
+
+    const championPayload = {
+      ok: true,
+      season,
+      competition: curComp || '',
+      computedAtISO: new Date().toISOString(),
+      winners: winners.map(w => ({ player_id: w.player_id, name: w.name, totalPoints: w.totalPoints })),
+      topPoints: top
+    };
+
+    // persist champion.json under this competition
+    await writeJson(req, pJoin(req, 'scores', 'champion.json'), championPayload);
+
+    // optionally switch tenant default to finals
+    const wantSwitch = req.body?.switchDefault !== false; // default true
+    let switched = false, finalsComp = null, finalsExists = false;
+
+    if (wantSwitch) {
+      finalsComp = inferFinalsCompName(req, curComp, req.body?.to);
+      if (finalsComp) {
+        const finalsDir = path.join(tenantDir(req), 'competitions', finalsComp);
+        finalsExists = fs.existsSync(finalsDir);
+        if (finalsExists) {
+          const tcfg = readTenantConfig(req);
+          const newCfg = { ...tcfg, defaultCompetition: finalsComp };
+          await writeTenantConfig(req, newCfg);
+          switched = true;
+        }
+      }
+    }
+
+    return res.json({
+      ...championPayload,
+      switched,
+      finalsComp,
+      finalsExists
+    });
+  } catch (e) {
+    console.error('finish_regular_season_error', e);
+    return res.status(500).json({ ok:false, error:'finish_failed', details: String(e) });
+  }
+});
+
+/** GET /competitions/champion — read champion.json if present */
+router.get('/competitions/champion', async (req, res) => {
+  try {
+    const p = pJoin(req, 'scores', 'champion.json');
+    const obj = readJsonSync(p, null);
+    if (!obj) return res.status(404).json({ ok:false, error:'not_found' });
+    return res.json(obj);
+  } catch (e) {
+    return res.status(500).json({ ok:false, error:'read_failed' });
+  }
+});
+
+/** GET /competitions/status — show current/default and finals target (if any) */
+router.get('/competitions/status', async (req, res) => {
+  try {
+    const curComp = (req.ctx && req.ctx.comp) || null;
+    const tcfg = readTenantConfig(req);
+    const finalsTo = inferFinalsCompName(req, curComp, null);
+    const finalsDir = finalsTo ? path.join(tenantDir(req), 'competitions', finalsTo) : null;
+    const finalsExists = finalsDir ? fs.existsSync(finalsDir) : false;
+
+    return res.json({
+      ok: true,
+      tenant: tenantSlug(req),
+      defaultCompetition: tcfg.defaultCompetition || '',
+      currentCompetition: curComp || '',
+      finalsTo: finalsTo || null,
+      finalsExists
+    });
+  } catch (e) {
+    return res.status(500).json({ ok:false, error:'status_failed' });
+  }
 });
 
 /* ========================= Players CRUD ========================= */
