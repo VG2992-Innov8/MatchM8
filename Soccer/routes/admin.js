@@ -683,3 +683,102 @@ router.post('/wipe/week', (req, res) => {
 });
 
 module.exports = router;
+
+async function ensureDir(p) { await fsp.mkdir(p, { recursive: true }).catch(()=>{}); }
+
+function isWeekFile(name) {
+  const m = name && name.match && name.match(/^week-(\d+)\.json$/);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+// --- Finals status: readiness to advance (checks last week & season totals)
+router.get('/finals/status', async (req, res) => {
+  const token = req.get('x-admin-token');
+  if (process.env.ADMIN_TOKEN && token !== process.env.ADMIN_TOKEN) return res.status(403).json({ error: 'forbidden' });
+
+  const tenant = req.query.t;
+  const fromComp = req.query.c;
+  if (!tenant || !fromComp) return res.status(400).json({ error: 'missing ?t and/or ?c' });
+
+  const dataDir = DATA_DIR || path.join(process.cwd(), 'data');
+  const compDir = path.join(dataDir, 'tenants', tenant, 'competitions', fromComp);
+  const fixturesDir = path.join(compDir, 'fixtures');
+
+  let seasonFolder = null, lastWeek = null;
+  try {
+    const seasons = (await fsp.readdir(fixturesDir, { withFileTypes: true }))
+      .filter(d => d.isDirectory()).map(d => d.name);
+    seasonFolder = seasons.find(n => /^season-\d{4}$/.test(n)) || seasons[0] || null;
+    if (seasonFolder) {
+      const weekDir = path.join(fixturesDir, seasonFolder);
+      const weeks = (await fsp.readdir(weekDir))
+        .map(isWeekFile).filter(Boolean).sort((a,b)=>a-b);
+      lastWeek = weeks.at(-1) || null;
+    }
+  } catch {}
+
+  const totalsPath = path.join(compDir, 'scores', 'season-totals.json');
+  const seasonTotals = readJson(totalsPath, []);
+  const totalsCount = Array.isArray(seasonTotals) ? seasonTotals.length : (seasonTotals ? Object.keys(seasonTotals).length : 0);
+
+  return res.json({ ok: true, tenant, fromComp, seasonFolder, lastWeek, totalsCount, totalsPath });
+});
+
+// --- Finals advance: snapshot season totals and switch tenant defaultCompetition
+router.post('/finals/advance', async (req, res) => {
+  const token = req.get('x-admin-token');
+  if (process.env.ADMIN_TOKEN && token !== process.env.ADMIN_TOKEN) return res.status(403).json({ error: 'forbidden' });
+
+  const tenant = req.query.t;
+  const fromComp = req.query.c;
+  let finalsComp = req.query.finals;
+  if (!tenant || !fromComp) return res.status(400).json({ error: 'missing ?t and/or ?c' });
+
+  const dataDir = DATA_DIR || path.join(process.cwd(), 'data');
+  const tenantDir = path.join(dataDir, 'tenants', tenant);
+  const compDir = path.join(tenantDir, 'competitions', fromComp);
+  const scoresDir = path.join(compDir, 'scores');
+  const totalsPath = path.join(scoresDir, 'season-totals.json');
+
+  // Infer finalsComp if not provided
+  const tenantCfgPath = path.join(tenantDir, 'config.json');
+  const tenantCfg = readJson(tenantCfgPath, {}) || {};
+  if (!finalsComp) {
+    if (tenantCfg.finals && tenantCfg.finals.targetCompetition) finalsComp = tenantCfg.finals.targetCompetition;
+    else finalsComp = fromComp + '-Finals';
+  }
+
+  // Validate season totals present
+  const seasonTotals = readJson(totalsPath, null);
+  if (!seasonTotals || (Array.isArray(seasonTotals) && seasonTotals.length === 0)) {
+    return res.status(400).json({ error: 'season totals missing or empty; compute final week first', totalsPath });
+  }
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const snapshotsDir = path.join(tenantDir, 'standings');
+  await ensureDir(snapshotsDir);
+  const snapshotName = `${fromComp}-season-totals-${timestamp}.json`;
+  const snapshotPath = path.join(snapshotsDir, snapshotName);
+  await writeJsonAtomic(snapshotPath, seasonTotals);
+
+  // Ensure finals comp exists and has basic skeleton
+  const finalsCompDir = path.join(tenantDir, 'competitions', finalsComp);
+  await ensureDir(finalsCompDir);
+  await ensureDir(path.join(finalsCompDir, 'scores'));
+  const finalsRulesPath = path.join(finalsCompDir, 'scores', 'rules.json');
+  if (!readJson(finalsRulesPath, null)) {
+    const rules = readJson(path.join(scoresDir, 'rules.json'), {
+      mode: 'basketball_close',
+      perTeam: { exact: 15, within5: 10, within10: 5 },
+      thresholds: { within5: 5, within10: 10 },
+      winnerPoints: 0
+    });
+    await writeJsonAtomic(finalsRulesPath, rules);
+  }
+
+  // Flip defaultCompetition
+  const newTenantCfg = { ...tenantCfg, defaultCompetition: finalsComp, finals: { ...(tenantCfg.finals||{}), switchedAt: new Date().toISOString(), fromCompetition: fromComp, snapshot: snapshotName, targetCompetition: finalsComp } };
+  await writeJsonAtomic(tenantCfgPath, newTenantCfg);
+
+  return res.json({ ok: true, tenant, fromComp, finalsComp, snapshot: snapshotPath, defaultCompetition: newTenantCfg.defaultCompetition });
+});
