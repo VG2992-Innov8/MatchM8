@@ -1,0 +1,8 @@
+﻿{
+    "deadline_mode":  "first_kickoff",
+    "timezone":  "Australia/Melbourne",
+    "current_week":  10,
+    "total_weeks":  10,
+    "season":  2025,
+    "lock_minutes_before_kickoff":  10
+}

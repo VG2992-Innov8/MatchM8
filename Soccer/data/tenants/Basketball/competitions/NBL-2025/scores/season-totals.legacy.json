@@ -1,0 +1,12 @@
+{
+  "p2": {
+    "name": "Bob",
+    "total": 3,
+    "weeks_played": 1
+  },
+  "p1": {
+    "name": "Alice",
+    "total": 2,
+    "weeks_played": 1
+  }
+}
