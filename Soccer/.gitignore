@@ -15,6 +15,15 @@ _diag_bundle/
 # keep a README so the folder exists in the repo
 /data/*
 !/data/README.md
+# allow Basketball demo data
+!/data/tenants/
+!/data/tenants/Basketball/
+!/data/tenants/Basketball/competitions/
+!/data/tenants/Basketball/competitions/NBL-2025/
+!/data/tenants/Basketball/competitions/NBL-2025/**
+!/data/tenants/Basketball/competitions/NBL-2025-Finals/
+!/data/tenants/Basketball/competitions/NBL-2025-Finals/**
+!/data/tenants/Basketball/config.json
 
 
 _clean/
