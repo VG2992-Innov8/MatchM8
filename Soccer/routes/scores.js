@@ -61,6 +61,9 @@ function PLAYERS(req)  { return joinData(req, 'players.json'); }
 function CFG_PATH(req) { return joinData(req, 'config.json'); }
 function RULES_PATH(req){ return path.join(SCO_DIR(req), 'rules.json'); }
 
+// tenant-level config (for flipping default competition)
+function TENANT_CFG_PATH(req) { return path.join(tenantRoot(req), 'config.json'); }
+
 // legacy (read-only) fallbacks at TENANT ROOT (not competition)
 function LEGACY_PRED_DIR(req) { return path.join(tenantRoot(req), 'predictions'); }
 function LEGACY_RES_DIR(req)  { return path.join(tenantRoot(req), 'results'); }
@@ -255,11 +258,10 @@ function computeBasketballPoints(pred, actual, fx) {
 // - Per-team points depending on distance to actual (exact / within5 / within10)
 // - Optional winner bonus (winnerPoints)
 // rules example:
-// { mode:"basketball_close",
-//   perTeam:{ exact:15, within5:10, within10:5 },
-//   thresholds:{ within5:5, within10:10 },
-//   winnerPoints:0 }
-// Basketball close-to-score mode
+// { "mode":"basketball_close",
+//   "perTeam":{"exact":15,"within5":10,"within10":5},
+//   "thresholds":{"within5":5,"within10":10},
+//   "winnerPoints":0 }
 function computeBasketballClosePoints(pred, actual, rules) {
   if (!actual) return 0;
 
@@ -309,23 +311,11 @@ function computeBasketballClosePoints(pred, actual, rules) {
   return pts;
 }
 
-// Make sure getScorer selects it:
+// Scorer selector (single source of truth)
 function getScorer(rules) {
-  if (rules?.mode === 'basketball_close')  return (p, a)    => computeBasketballClosePoints(p, a, rules);
+  if (rules?.mode === 'basketball_close')  return (p, a, f) => computeBasketballClosePoints(p, a, rules);
   if (rules?.mode === 'basketball_basic')  return (p, a, f) => computeBasketballPoints(p, a, f);
   return (p, a) => computeSoccerPoints(p, a);
-}
-
-
-// Select scorer based on rules.json (default to Soccer)
-function getScorer(rules) {
-  if (rules && rules.mode === 'basketball_basic') {
-    return (p, a, fx) => computeBasketballPoints(p, a, fx);
-  }
-  if (rules && rules.mode === 'basketball_close') {
-    return (p, a, fx) => computeBasketballClosePoints(p, a, rules);
-  }
-  return (p, a, fx) => computeSoccerPoints(p, a, fx);
 }
 
 /* ---------------- Fixtures helpers ---------------- */
@@ -346,6 +336,70 @@ function readFixturesForWeek(req, week) {
       readJson(path.join(fxBase, `week-${week}.json`), null)
    ?? readJson(path.join(fxBase, 'weeks', `week-${week}.json`), null);
   return normaliseFixtures(raw);
+}
+
+/* ---------------- Champions / post-season helpers ---------------- */
+
+// From season totals array -> champions (handles ties)
+function computeChampionsFromTotals(seasonTotalsArr = []) {
+  if (!Array.isArray(seasonTotalsArr) || !seasonTotalsArr.length) {
+    return { maxPoints: 0, champions: [] };
+  }
+  const maxPoints = Math.max(...seasonTotalsArr.map(r => Number(r.totalPoints || 0)));
+  const champions = seasonTotalsArr
+    .filter(r => Number(r.totalPoints || 0) === maxPoints)
+    .map(r => ({ player_id: r.player_id, player: r.player, totalPoints: r.totalPoints }));
+  return { maxPoints, champions };
+}
+
+// Flip tenant default competition if requested (idempotent)
+function maybeFlipTenantDefaultCompetition(req, finalsComp, enabled) {
+  if (!enabled || !finalsComp) return false;
+  const marker = path.join(SCO_DIR(req), '.postseason_switched');
+  if (safeStat(marker)) return false; // already flipped
+
+  const tcfgPath = TENANT_CFG_PATH(req);
+  const tcfg = readJson(tcfgPath, {}) || {};
+  if (tcfg.defaultCompetition === finalsComp) {
+    writeJson(marker, { flippedAt: new Date().toISOString(), finalsComp, already: true });
+    return false;
+  }
+  tcfg.defaultCompetition = finalsComp;
+  writeJson(tcfgPath, tcfg);
+  writeJson(marker, { flippedAt: new Date().toISOString(), finalsComp, changed: true });
+  return true;
+}
+
+// Called after we recompute season totals
+function maybeHandlePostSeason(req, computedWeek, seasonTotalsArr) {
+  const rules = readRules(req) || {};
+  const post = rules.postSeason || null;
+  if (!post) return;
+
+  // Detect end of regular season from competition config
+  const cfg = readConfig(req);
+  const terminalWeek =
+    Number(cfg.regular_season_weeks) || Number(cfg.total_weeks) || null;
+
+  if (!terminalWeek || computedWeek < terminalWeek) return;
+
+  // Persist champion.json
+  const { maxPoints, champions } = computeChampionsFromTotals(seasonTotalsArr);
+  const championFile = path.join(SCO_DIR(req), 'champion.json');
+  const payload = {
+    ok: true,
+    season: Number(cfg.season || 2025),
+    computedAtISO: new Date().toISOString(),
+    week: computedWeek,
+    maxPoints,
+    champions
+  };
+  writeJson(championFile, payload);
+
+  // Optional: auto flip default competition to finals
+  const finalsComp = typeof post.autoSwitchTo === 'string' ? post.autoSwitchTo.trim() : '';
+  const doFlip = !!post.autoFlipTenantDefault;
+  maybeFlipTenantDefaultCompetition(req, finalsComp, doFlip);
 }
 
 /* ---------------- Compute helpers ---------------- */
@@ -481,7 +535,10 @@ function computeAndPersist(req, week) {
   const weeklyWithSeason = weeklyOut.map(r => {
     const tot = totalsMap.get(r.player_id);
     return { ...r, seasonTotal: tot ? tot.totalPoints : r.weekPoints };
-    });
+  });
+
+  // Post-season automation (champion + optional finals flip)
+  maybeHandlePostSeason(req, week, seasonTotalsArr);
 
   return {
     week,
@@ -838,6 +895,30 @@ router.get('/leaderboard/matrix', async (req, res) => {
     console.error('leaderboard/matrix error', err);
     res.status(500).json({ error: 'leaderboard matrix failed', details: String(err) });
   }
+});
+
+/* ---------- Champion endpoint ---------- */
+// Returns champion.json if present, else computes from season-totals.json on the fly
+router.get('/champion', (req, res) => {
+  res.set('Cache-Control', 'no-store, max-age=0');
+  const championFile = path.join(SCO_DIR(req), 'champion.json');
+  let data = readJson(championFile, null);
+
+  if (!data) {
+    const cfg = readConfig(req);
+    const seasonTotals = readJson(path.join(SCO_DIR(req), 'season-totals.json'), []);
+    const normTotals = seasonMapToArray(seasonToMap(seasonTotals));
+    const { maxPoints, champions } = computeChampionsFromTotals(normTotals);
+    data = {
+      ok: true,
+      season: Number(cfg.season || 2025),
+      computedAtISO: new Date().toISOString(),
+      maxPoints,
+      champions
+    };
+  }
+
+  return res.json(data);
 });
 
 module.exports = router;
