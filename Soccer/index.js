@@ -85,6 +85,33 @@ const SKIP_LICENSE = String(process.env.DEMO_SKIP_LICENSE || '').toLowerCase() =
 function parseTenantMap() { try { return JSON.parse(process.env.TENANT_MAP || '{}'); } catch { return {}; } }
 function sanitizeSlug(s) { return String(s || '').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 64); }
 
+// --- NEW: get week from query/body/referer for auto-route ---
+function getWeekFromReq(req) {
+  // query
+  if (req?.query?.week != null) {
+    const n = Number(req.query.week);
+    if (Number.isFinite(n)) return n;
+  }
+  // body
+  if (req?.body?.week != null) {
+    const n = Number(req.body.week);
+    if (Number.isFinite(n)) return n;
+  }
+  // referer
+  try {
+    const ref = req.get('referer');
+    if (ref) {
+      const u = new URL(ref);
+      const w = u.searchParams.get('week');
+      if (w != null) {
+        const n = Number(w);
+        if (Number.isFinite(n)) return n;
+      }
+    }
+  } catch {}
+  return undefined;
+}
+
 function resolveTenant(req) {
   const map = parseTenantMap();
   const host = (req.headers['x-forwarded-host'] || req.hostname || '')
@@ -108,17 +135,39 @@ function tenantMiddleware(req, _res, next) {
     const tenantDir = path.join(DATA_DIR, 'tenants', tenant);
     fs.mkdirSync(tenantDir, { recursive: true });
 
-    // determine competition (optional)
-    const tenantCfg = readJsonIfExists(path.join(tenantDir, 'config.json'), {});
+    // load tenant-level config (has finals block)
+    const tenantCfg = readJsonIfExists(path.join(tenantDir, 'config.json'), {}) || {};
+
+    // --- NEW: finals-aware auto-route selection by week ---
+    const week = getWeekFromReq(req); // may be undefined
+    const finals = tenantCfg.finals || {};
+    const regularCompCfg = finals.regularCompetition
+      || tenantCfg.defaultCompetition
+      || process.env.DEFAULT_COMP
+      || 'EPL-2025';
+    const finalsCompCfg  = finals.targetCompetition
+      || `${regularCompCfg}-Finals`;
+
+    // base selection from query/defaults
     let comp = sanitizeSlug(
-      req.query.c ||
-      tenantCfg?.defaultCompetition ||
-      process.env.DEFAULT_COMP ||
-      'EPL-2025'
+      req.query.c
+      || tenantCfg.defaultCompetition
+      || process.env.DEFAULT_COMP
+      || 'EPL-2025'
     );
+
+    // if configured, and we know the week → override comp deterministically
+    if (finals.autoRoute && Number.isFinite(week) && Number.isFinite(Number(finals.startWeek))) {
+      comp = sanitizeSlug(week >= Number(finals.startWeek) ? finalsCompCfg : regularCompCfg);
+    }
+
     // allow blank comp by setting DEFAULT_COMP="" if you want legacy paths
     if (comp === undefined || comp === null) comp = '';
     if (comp === 'default') comp = '';
+
+    // expose chosen scope back to query so downstream routes & UI are consistent
+    req.query.t = tenant;
+    req.query.c = comp;
 
     // derive compDir and dataDir
     const compDir = comp ? path.join(tenantDir, 'competitions', comp) : tenantDir;
@@ -131,7 +180,8 @@ function tenantMiddleware(req, _res, next) {
       try { fs.mkdirSync(path.join(dataDir, rel), { recursive: true }); } catch {}
     }
 
-    req.ctx = { tenant, comp, tenantDir, compDir, dataDir };
+    // include week in context for convenience
+    req.ctx = { tenant, comp, tenantDir, compDir, dataDir, week: Number.isFinite(week) ? week : undefined };
   } catch {
     req.ctx = { tenant: process.env.TENANT || 'default', comp: '', tenantDir: BASE_DATA_DIR, compDir: BASE_DATA_DIR, dataDir: BASE_DATA_DIR };
   }
@@ -346,7 +396,7 @@ app.use(cookieParser());
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false }));
 
-// 🔑 Per-request TENANT + COMP context
+// 🔑 Per-request TENANT + COMP context (now finals-aware via week)
 app.use(tenantMiddleware);
 
 // Health
