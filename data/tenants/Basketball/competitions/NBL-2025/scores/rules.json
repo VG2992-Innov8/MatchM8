@@ -1,13 +1,18 @@
-﻿{
-    "winnerPoints":  0,
-    "thresholds":  {
-                       "within5":  5,
-                       "within10":  10
-                   },
-    "perTeam":  {
-                    "within10":  5,
-                    "within5":  10,
-                    "exact":  15
-                },
-    "mode":  "basketball_close"
+{
+  "winnerPoints": 0,
+  "thresholds": {
+    "within5": 5,
+    "within10": 10
+  },
+  "perTeam": {
+    "within10": 5,
+    "within5": 10,
+    "exact": 15
+  },
+  "mode": "basketball_close",
+  "postSeason": {
+    "autoSwitchTo": "NBL-2025-Finals",
+    "autoFlipTenantDefault": true,
+    "declareChampion": true
+  }
 }
