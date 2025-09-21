@@ -1,0 +1,152 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>MatchM8 Diagnostics</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 20px; }
+    h1 { margin-bottom: 6px; }
+    .row { display: grid; grid-template-columns: 280px 1fr; gap: 16px; margin: 12px 0; }
+    input, select { width: 100%; padding: 8px; }
+    pre { background: #111; color: #eee; padding: 12px; border-radius: 8px; overflow:auto; max-height: 360px;}
+    .ok { color: #0a0; font-weight: 600; }
+    .bad { color: #b00; font-weight: 600; }
+    .muted { color: #777; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 12px; margin: 16px 0; }
+    button { padding: 8px 12px; border-radius: 8px; border: 1px solid #ccc; cursor: pointer; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(300px,1fr)); gap: 16px; }
+    .pill { display:inline-block; padding: 2px 8px; border-radius: 999px; background:#eee; margin-left:8px;}
+  </style>
+</head>
+<body>
+  <h1>MatchM8 Diagnostics <span class="muted">(read-only)</span></h1>
+  <div class="row">
+    <label>Base URL</label>
+    <input id="base" value="" placeholder="https://matchm8-soccer.onrender.com" />
+  </div>
+  <div class="row">
+    <label>Tenant</label>
+    <input id="ten" value="Basketball" />
+  </div>
+  <div class="row">
+    <label>Week</label>
+    <input id="week" type="number" min="1" value="1" />
+  </div>
+  <div class="row">
+    <label>Competition (optional override)</label>
+    <input id="comp" value="" placeholder="leave blank to let server auto-route by week" />
+  </div>
+  <div class="row">
+    <div></div>
+    <div>
+      <button id="run">Run checks</button>
+      <span class="muted">This will fetch: __meta, rules.json, fixtures, predictions, results.</span>
+    </div>
+  </div>
+
+  <div id="out" class="grid"></div>
+
+<script>
+function el(tag, cls, text){ const x = document.createElement(tag); if(cls) x.className=cls; if(text!=null) x.textContent=text; return x; }
+function card(title){ const c=el('div','card'); c.appendChild(el('h3','',title)); return c; }
+function code(obj){ const p=el('pre'); p.textContent = (typeof obj==='string')? obj : JSON.stringify(obj,null,2); return p; }
+
+async function getJSON(url){
+  const res = await fetch(url, { credentials: 'omit' });
+  const txt = await res.text();
+  try { return { ok: res.ok, json: JSON.parse(txt), raw: txt, status: res.status }; }
+  catch { return { ok: res.ok, json: null, raw: txt, status: res.status }; }
+}
+
+function q(id){ return document.getElementById(id); }
+
+document.getElementById('run').onclick = async () => {
+  const out = document.getElementById('out');
+  out.innerHTML = '';
+  const base = q('base').value.trim().replace(/\/$/, '');
+  const t = q('ten').value.trim();
+  const w = Number(q('week').value);
+  const c = q('comp').value.trim();
+
+  function build(path){ 
+    const u = new URL(base + path);
+    u.searchParams.set('t', t);
+    u.searchParams.set('week', String(w));
+    if (c) u.searchParams.set('c', c);
+    return u.toString();
+  }
+
+  // 1) __meta
+  const metaUrl = build('/api/__meta');
+  const meta = await getJSON(metaUrl);
+  const c1 = card(`__meta  ${meta.ok ? '✅' : '❌'}`);
+  c1.appendChild(el('div','muted', metaUrl));
+  c1.appendChild(code(meta.ok? meta.json : meta.raw));
+  out.appendChild(c1);
+
+  const compUsed = meta?.json?.competition || '(unknown)';
+  const compPill = el('span','pill', 'competition: ' + compUsed);
+  c1.querySelector('h3').appendChild(compPill);
+
+  // 2) rules.json (used by compute)
+  const rulesUrl = build('/data/scores/rules.json');
+  const rules = await getJSON(rulesUrl);
+  const c2 = card(`rules.json  ${rules.ok ? '✅' : '❌'}`);
+  c2.appendChild(el('div','muted', rulesUrl));
+  c2.appendChild(code(rules.ok? rules.json : rules.raw));
+  out.appendChild(c2);
+
+  // 3) fixtures
+  const fxUrl = build('/api/fixtures');
+  const fx = await getJSON(fxUrl);
+  const c3 = card(`fixtures (week ${w})  ${fx.ok ? '✅' : '❌'}`);
+  c3.appendChild(el('div','muted', fxUrl));
+  c3.appendChild(code(fx.ok? fx.json : fx.raw));
+  out.appendChild(c3);
+
+  // 4) predictions
+  const prUrl = build('/data/predictions/week-' + w + '.json');
+  const pr = await getJSON(prUrl);
+  const c4 = card(`predictions (week ${w})  ${pr.ok ? '✅' : '❌'}`);
+  c4.appendChild(el('div','muted', prUrl));
+  c4.appendChild(code(pr.ok? pr.json : pr.raw));
+  out.appendChild(c4);
+
+  // 5) results
+  const rsUrl = build('/api/results');
+  const rs = await getJSON(rsUrl);
+  const c5 = card(`results (week ${w})  ${rs.ok ? '✅' : '❌'}`);
+  c5.appendChild(el('div','muted', rsUrl));
+  c5.appendChild(code(rs.ok? rs.json : rs.raw));
+  out.appendChild(c5);
+
+  // 6) simple heuristic: do IDs match?
+  try {
+    const idsFx = Array.isArray(fx.json)? fx.json.map(g=>g.id||g.game_id).filter(Boolean) : [];
+    const idsPr = pr.json ? 
+      Object.values(pr.json).flatMap(v => (v.predictions||[]).map(r=>r.id||r.game_id).filter(Boolean)) : [];
+    const idsRs = Object.keys(rs.json?.results || {});
+
+    const mismatches = [];
+    if (idsFx.length && idsPr.length) {
+      const missingInPred = idsFx.filter(x => !idsPr.includes(x));
+      if (missingInPred.length) mismatches.push('Missing predictions for: '+ missingInPred.join(', '));
+    }
+    if (idsFx.length && idsRs.length) {
+      const missingResults = idsFx.filter(x => !idsRs.includes(x));
+      if (missingResults.length) mismatches.push('Missing results for: '+ missingResults.join(', '));
+    }
+
+    const c6 = card('ID checks');
+    const ok = mismatches.length===0;
+    c6.appendChild(el('div', ok? 'ok':'bad', ok? 'Looks consistent' : mismatches.join(' | ')));
+    out.appendChild(c6);
+  } catch (e) {
+    const c6 = card('ID checks');
+    c6.appendChild(el('div','bad','Error parsing: '+ e.message));
+    out.appendChild(c6);
+  }
+};
+</script>
+</body></html>
