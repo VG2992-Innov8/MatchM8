@@ -1,0 +1,52 @@
+﻿{
+    "alice":  {
+                  "predictions":  [
+                                      {
+                                          "away":  86,
+                                          "id":  "W07",
+                                          "home":  92
+                                      }
+                                  ],
+                  "player_id":  "alice"
+              },
+    "charlie":  {
+                    "predictions":  [
+                                        {
+                                            "away":  82,
+                                            "id":  "W07",
+                                            "home":  90
+                                        }
+                                    ],
+                    "player_id":  "charlie"
+                },
+    "bob":  {
+                "predictions":  [
+                                    {
+                                        "away":  85,
+                                        "id":  "W07",
+                                        "home":  88
+                                    }
+                                ],
+                "player_id":  "bob"
+            },
+    "evan":  {
+                 "predictions":  [
+                                     {
+                                         "away":  84,
+                                         "id":  "W07",
+                                         "home":  89
+                                     }
+                                 ],
+                 "player_id":  "evan"
+             },
+    "dana":  {
+                 "predictions":  [
+                                     {
+                                         "away":  95,
+                                         "id":  "W07",
+                                         "home":  100
+                                     }
+                                 ],
+                 "player_id":  "dana"
+             }
+}

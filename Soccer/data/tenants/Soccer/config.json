@@ -1,0 +1,10 @@
+{
+  "tenant": "Soccer",
+  "brand_title": "MatchM8",
+  "brand_subtitle": "Soccer",
+  "sport": "soccer",
+  "seats": 20,
+  "defaultCompetition": "EPL-2025",
+  "license_token": null
+}
+
