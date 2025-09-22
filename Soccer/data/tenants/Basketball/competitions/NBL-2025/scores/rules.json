@@ -1,0 +1,6 @@
+﻿{
+  "mode": "basketball_close",
+  "perTeam": { "exact": 15, "within5": 10, "within10": 5 },
+  "thresholds": { "within5": 5, "within10": 10 },
+  "winnerPoints": 0
+}
