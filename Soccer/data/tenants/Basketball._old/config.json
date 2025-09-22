@@ -1,0 +1,16 @@
+{
+  "tenant": "Basketball",
+  "brand_title": "MatchM8",
+  "brand_subtitle": "Basketball",
+  "sport": "basketball",
+  "seats": 20,
+  "defaultCompetition": "NBL-2025",
+  "license_token": null,
+  "finals": {
+    "enabled": true,
+    "from": "NBL-2025",
+    "to": "NBL-2025-Finals",
+    "trigger": "on_last_regular_week_compute",
+    "declareChampion": true
+  }
+}

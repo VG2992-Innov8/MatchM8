@@ -33,6 +33,7 @@ function toIntOrNull(v) {
   const n = Number(v);
   return Number.isFinite(n) ? Math.trunc(n) : null;
 }
+function cleanToken(s=''){ return String(s).trim().replace(/^\s*['"]|['"]\s*$/g,''); }
 
 /* ---------------- Tenant/competition roots ---------------- */
 
@@ -557,6 +558,28 @@ function readSavedWeekly(req, week) {
 }
 
 /* ---------------- Endpoints ---------------- */
+
+// Read current rules (handy for debugging)
+router.get('/rules', (req, res) => {
+  res.set('Cache-Control', 'no-store, max-age=0');
+  return res.json({ ok: true, path: RULES_PATH(req), rules: readRules(req) });
+});
+
+// Admin: upsert rules.json for the current tenant+competition (writes LIVE file)
+router.post('/rules', express.json(), (req, res) => {
+  try {
+    const token = cleanToken(req.get('x-admin-token') || '');
+    const expected = cleanToken(process.env.ADMIN_TOKEN || '');
+    if (!token || !expected || token !== expected) {
+      return res.status(401).json({ ok: false, error: 'invalid admin token' });
+    }
+    const p = RULES_PATH(req);
+    writeJson(p, req.body || {});
+    return res.json({ ok: true, path: p });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e) });
+  }
+});
 
 // Preview (no writes)
 router.get('/', (req, res) => {

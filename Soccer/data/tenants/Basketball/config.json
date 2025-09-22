@@ -1,0 +1,13 @@
+{
+  "defaultCompetition": "NBL-2025",
+  "locks": {
+    "predictions": false,
+    "results": false
+  },
+  "finals": {
+    "autoRoute": true,
+    "regularCompetition": "NBL-2025",
+    "targetCompetition": "NBL-2025-Finals",
+    "startWeek": 11
+  }
+}

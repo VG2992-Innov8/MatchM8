@@ -1,0 +1,14 @@
+[
+  {
+    "player_id": "p2",
+    "player": "Bob",
+    "totalPoints": 3,
+    "weeksPlayed": 1
+  },
+  {
+    "player_id": "p1",
+    "player": "Alice",
+    "totalPoints": 2,
+    "weeksPlayed": 1
+  }
+]

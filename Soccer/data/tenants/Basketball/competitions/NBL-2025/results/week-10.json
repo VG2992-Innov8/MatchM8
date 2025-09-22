@@ -1,0 +1,15 @@
+{
+  "week": 10,
+  "results": [
+    {
+      "game_id": "W10G1",
+      "home_score": 92,
+      "away_score": 88
+    },
+    {
+      "game_id": "W10G2",
+      "home_score": 101,
+      "away_score": 104
+    }
+  ]
+}

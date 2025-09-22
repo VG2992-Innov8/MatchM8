@@ -1,0 +1,21 @@
+{
+  "week": 10,
+  "games": [
+    {
+      "game_id": "W10G1",
+      "home": "Melbourne United",
+      "away": "Sydney Kings",
+      "tipoff": "2025-03-15T18:30:00+11:00",
+      "spread_line": -2.5,
+      "total_line": 178.5
+    },
+    {
+      "game_id": "W10G2",
+      "home": "Perth Wildcats",
+      "away": "Brisbane Bullets",
+      "tipoff": "2025-03-16T19:00:00+08:00",
+      "spread_line": -1.5,
+      "total_line": 182.5
+    }
+  ]
+}
