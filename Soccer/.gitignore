@@ -30,3 +30,8 @@ _clean/
 *.zip
 
 !data/tenants/Basketball/**
+# allow Basketball tenant data
+!data/
+!data/tenants/
+!data/tenants/Basketball/
+!data/tenants/Basketball/**
