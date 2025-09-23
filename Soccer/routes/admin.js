@@ -240,7 +240,7 @@ function inferFinalsCompName(req, currentComp, overrideTo) {
   return null;
 }
 
-/** POST /competitions/finish — declare champion(s) for current competition and (optionally) switch defaultCompetition to finals */
+/** POST /competitions/finish — declare champion(s) and optionally switch defaultCompetition to finals */
 router.post('/competitions/finish', async (req, res) => {
   try {
     const curComp = (req.ctx && req.ctx.comp) || null;
@@ -668,7 +668,7 @@ router.post('/players/upload', async (req, res) => {
   } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
 });
 
-/* ========================= Maintenance ========================= */
+/* ========================= Maintenance (predictions/results wipe) ========================= */
 
 router.post('/wipe/week', (req, res) => {
   try {
@@ -682,7 +682,91 @@ router.post('/wipe/week', (req, res) => {
   } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
 });
 
+/* ========================= NEW: explicit admin upserts & score clears ========================= */
+
+// Overwrite (or clear with {}) predictions for a week
+router.post('/predictions/admin/upsert', async (req, res) => {
+  try {
+    const wk = Number(req.query.week ?? req.body?.week);
+    if (!Number.isFinite(wk) || wk < 1) return res.status(400).json({ ok:false, error:'week required' });
+    const payload = (req.body && Object.keys(req.body).length ? req.body : {}); // allow {}
+    const pth = pJoin(req, 'predictions', `week-${wk}.json`);
+    await writeJson(req, pth, payload);
+    return res.json({ ok:true, week:wk, path:pth, size:Object.keys(payload||{}).length });
+  } catch (e) {
+    return res.status(500).json({ ok:false, error:'predictions_upsert_failed', details:String(e) });
+  }
+});
+
+// Overwrite (or clear with {}) results for a week
+router.post('/results/admin/upsert', async (req, res) => {
+  try {
+    const wk = Number(req.query.week ?? req.body?.week);
+    if (!Number.isFinite(wk) || wk < 1) return res.status(400).json({ ok:false, error:'week required' });
+    const payload = (req.body && Object.keys(req.body).length ? req.body : {}); // allow {}
+    const pth = pJoin(req, 'results', `week-${wk}.json`);
+    await writeJson(req, pth, payload);
+    return res.json({ ok:true, week:wk, path:pth, keys:Object.keys(payload||{}).length });
+  } catch (e) {
+    return res.status(500).json({ ok:false, error:'results_upsert_failed', details:String(e) });
+  }
+});
+
+// Delete saved weekly table for a week and nuke season totals (so they rebuild clean)
+router.post('/scores/clear-week', async (req, res) => {
+  try {
+    const wk = Number(req.query.week ?? req.body?.week);
+    if (!Number.isFinite(wk) || wk < 1) return res.status(400).json({ ok:false, error:'week required' });
+
+    const weeksDir = pJoin(req, 'scores', 'weeks');
+    const weekFile = path.join(weeksDir, `week-${wk}.json`);
+    if (fs.existsSync(weekFile)) await fsp.unlink(weekFile);
+
+    const totals = pJoin(req, 'scores', 'season-totals.json');
+    const totalsLegacy = pJoin(req, 'scores', 'season-totals.legacy.json');
+    if (fs.existsSync(totals)) await fsp.unlink(totals);
+    if (fs.existsSync(totalsLegacy)) await fsp.unlink(totalsLegacy);
+
+    return res.json({ ok:true, cleared:[`scores/weeks/week-${wk}.json`], totalsReset:true });
+  } catch (e) {
+    return res.status(500).json({ ok:false, error:'clear_week_failed', details:String(e) });
+  }
+});
+
+// Wipe ALL saved score artifacts for this competition (weekly tables, totals, champion)
+router.post('/scores/clear-all', async (req, res) => {
+  try {
+    if ((req.query.confirm || req.body?.confirm || '').toString().toUpperCase() !== 'YES') {
+      return res.status(400).json({ ok:false, error:'confirm=YES required' });
+    }
+    const cleared = [];
+
+    const weeksDir = pJoin(req, 'scores', 'weeks');
+    try {
+      const entries = await fsp.readdir(weeksDir).catch(()=>[]);
+      for (const name of entries) {
+        if (/^week-\d+\.json$/i.test(name)) {
+          await fsp.unlink(path.join(weeksDir, name)).catch(()=>{});
+        }
+      }
+      cleared.push('scores/weeks/*');
+    } catch {}
+
+    for (const rel of ['scores/season-totals.json', 'scores/season-totals.legacy.json', 'scores/champion.json']) {
+      const p = pJoin(req, rel);
+      if (fs.existsSync(p)) await fsp.unlink(p).catch(()=>{});
+      cleared.push(rel);
+    }
+
+    return res.json({ ok:true, cleared });
+  } catch (e) {
+    return res.status(500).json({ ok:false, error:'clear_all_failed', details:String(e) });
+  }
+});
+
 module.exports = router;
+
+/* ========================= Finals (status/advance) legacy helpers at bottom ========================= */
 
 async function ensureDir(p) { await fsp.mkdir(p, { recursive: true }).catch(()=>{}); }
 
@@ -700,8 +784,8 @@ router.get('/finals/status', async (req, res) => {
   const fromComp = req.query.c;
   if (!tenant || !fromComp) return res.status(400).json({ error: 'missing ?t and/or ?c' });
 
-  const dataDir = DATA_DIR || path.join(process.cwd(), 'data');
-  const compDir = path.join(dataDir, 'tenants', tenant, 'competitions', fromComp);
+  const dataDirBase = DATA_DIR || path.join(process.cwd(), 'data');
+  const compDir = path.join(dataDirBase, 'tenants', tenant, 'competitions', fromComp);
   const fixturesDir = path.join(compDir, 'fixtures');
 
   let seasonFolder = null, lastWeek = null;
@@ -718,7 +802,7 @@ router.get('/finals/status', async (req, res) => {
   } catch {}
 
   const totalsPath = path.join(compDir, 'scores', 'season-totals.json');
-  const seasonTotals = readJson(totalsPath, []);
+  const seasonTotals = readJsonSync(totalsPath, []);
   const totalsCount = Array.isArray(seasonTotals) ? seasonTotals.length : (seasonTotals ? Object.keys(seasonTotals).length : 0);
 
   return res.json({ ok: true, tenant, fromComp, seasonFolder, lastWeek, totalsCount, totalsPath });
@@ -734,40 +818,40 @@ router.post('/finals/advance', async (req, res) => {
   let finalsComp = req.query.finals;
   if (!tenant || !fromComp) return res.status(400).json({ error: 'missing ?t and/or ?c' });
 
-  const dataDir = DATA_DIR || path.join(process.cwd(), 'data');
-  const tenantDir = path.join(dataDir, 'tenants', tenant);
-  const compDir = path.join(tenantDir, 'competitions', fromComp);
+  const dataDirBase = DATA_DIR || path.join(process.cwd(), 'data');
+  const tenantBase = path.join(dataDirBase, 'tenants', tenant);
+  const compDir = path.join(tenantBase, 'competitions', fromComp);
   const scoresDir = path.join(compDir, 'scores');
   const totalsPath = path.join(scoresDir, 'season-totals.json');
 
   // Infer finalsComp if not provided
-  const tenantCfgPath = path.join(tenantDir, 'config.json');
-  const tenantCfg = readJson(tenantCfgPath, {}) || {};
+  const tenantCfgPath = path.join(tenantBase, 'config.json');
+  const tenantCfg = readJsonSync(tenantCfgPath, {}) || {};
   if (!finalsComp) {
     if (tenantCfg.finals && tenantCfg.finals.targetCompetition) finalsComp = tenantCfg.finals.targetCompetition;
     else finalsComp = fromComp + '-Finals';
   }
 
   // Validate season totals present
-  const seasonTotals = readJson(totalsPath, null);
+  const seasonTotals = readJsonSync(totalsPath, null);
   if (!seasonTotals || (Array.isArray(seasonTotals) && seasonTotals.length === 0)) {
     return res.status(400).json({ error: 'season totals missing or empty; compute final week first', totalsPath });
   }
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const snapshotsDir = path.join(tenantDir, 'standings');
+  const snapshotsDir = path.join(tenantBase, 'standings');
   await ensureDir(snapshotsDir);
   const snapshotName = `${fromComp}-season-totals-${timestamp}.json`;
   const snapshotPath = path.join(snapshotsDir, snapshotName);
   await writeJsonAtomic(snapshotPath, seasonTotals);
 
   // Ensure finals comp exists and has basic skeleton
-  const finalsCompDir = path.join(tenantDir, 'competitions', finalsComp);
+  const finalsCompDir = path.join(tenantBase, 'competitions', finalsComp);
   await ensureDir(finalsCompDir);
   await ensureDir(path.join(finalsCompDir, 'scores'));
   const finalsRulesPath = path.join(finalsCompDir, 'scores', 'rules.json');
-  if (!readJson(finalsRulesPath, null)) {
-    const rules = readJson(path.join(scoresDir, 'rules.json'), {
+  if (!readJsonSync(finalsRulesPath, null)) {
+    const rules = readJsonSync(path.join(scoresDir, 'rules.json'), {
       mode: 'basketball_close',
       perTeam: { exact: 15, within5: 10, within10: 5 },
       thresholds: { within5: 5, within10: 10 },
