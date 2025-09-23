@@ -699,6 +699,12 @@ if (admin.ok) {
   mount('./routes/admin.js', '/api/admin', admin.mod);
 }
 
+// ---- Extra admin tooling (mounted behind admin_auth) ----
+const adminTools = safeRequire('./routes/admin_clear.js', './routes/admin_clear');
+if (adminTools.ok) {
+  mount('./routes/admin_clear.js', '/api/admin', adminTools.mod);
+}
+
 // ---- Locks route — tenant-gated (DEMO_SKIP_LICENSE bypass handled in middleware) ----
 {
   const locksRt = safeRequire('./routes/locks.js', './routes/locks');
