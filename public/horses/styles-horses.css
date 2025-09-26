@@ -1,0 +1,4 @@
+﻿:root{--brand-1:#0f5132;--brand-2:#198754;--brand-3:#d1e7dd}
+.header,.btn-primary{background:var(--brand-2)}
+.card{border-color:var(--brand-2);background:var(--brand-3)}
+.lock-badge{color:#fff;background:var(--brand-1);padding:2px 6px;border-radius:6px;font-size:.8rem}

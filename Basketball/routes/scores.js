@@ -1,5 +1,4 @@
-// routes/scores.js — tenant+competition-aware *Basketball* scorer (supports old & new prediction shapes)
-
+// routes/scores.js — tenant+competition-aware scorer (Basketball + Horses 7x7)
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
@@ -58,12 +57,13 @@ function SCO_DIR(req)  { return joinData(req, 'scores'); }
 function SCO_WEEKS(req){ return path.join(SCO_DIR(req), 'weeks'); }
 function PLAYERS(req)  { return joinData(req, 'players.json'); }
 function CFG_PATH(req) { return joinData(req, 'config.json'); }
+function RULES_PATH(req){ return joinData(req, 'score', 'rules.json'); }
 
 // legacy (read-only) fallbacks at TENANT ROOT (not competition)
 function LEGACY_PRED_DIR(req) { return path.join(tenantRoot(req), 'predictions'); }
 function LEGACY_RES_DIR(req)  { return path.join(tenantRoot(req), 'results'); }
 
-/* ---------------- Normalisers ---------------- */
+/* ---------------- Normalisers (Basketball) ---------------- */
 
 // results can be {id:{homeGoals,awayGoals}} or {id:{home,away}} or {id:{home_score,away_score}} or {id:[h,a]}
 function normaliseResults(obj = {}) {
@@ -212,7 +212,7 @@ function computeBasketballPoints(pred, actual, fx) {
   return pts;
 }
 
-/* ---------------- Fixtures helpers ---------------- */
+/* ---------------- Fixtures readers ---------------- */
 
 function readConfig(req) {
   try {
@@ -223,7 +223,17 @@ function readConfig(req) {
   }
 }
 
-function readFixturesForWeek(req, week) {
+function readRules(req) {
+  try {
+    const raw = fs.readFileSync(RULES_PATH(req), 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+// Basketball fixtures live in fixtures/season-YYYY/week-N.json (or /weeks/week-N.json legacy)
+function readBasketballFixturesForWeek(req, week) {
   const cfg = readConfig(req);
   const fxBase = joinData(req, 'fixtures', `season-${cfg.season || 2025}`);
   const raw =
@@ -232,9 +242,94 @@ function readFixturesForWeek(req, week) {
   return normaliseFixtures(raw);
 }
 
+/* ---------------- Horses 7x7 readers + scoring ---------------- */
+
+// Fixtures: fixtures/week-N.json — return Map(race_id -> race)
+function readHorsesFixturesForWeek(req, week) {
+  const raw = readJson(path.join(joinData(req, 'fixtures'), `week-${week}.json`), null);
+  const out = new Map();
+  if (raw && Array.isArray(raw.races)) {
+    for (const r of raw.races) {
+      const id = String(r.race_id ?? r.id ?? `R${out.size+1}`);
+      out.set(id, {
+        race_id: id,
+        track: r.track || '',
+        title: r.title || r.name || '',
+        post_time_utc: r.post_time_utc || null,
+        horses: Array.isArray(r.horses) ? r.horses.map(h => ({
+          num: toIntOrNull(h.num), name: String(h.name || ''), jockey: h.jockey ? String(h.jockey) : undefined
+        })).filter(h => h.num != null) : []
+      });
+    }
+  }
+  return out;
+}
+
+// Results: { results:[ {race_id, first, second} ] } -> Map(race_id -> {first, second})
+function readHorsesResultsMap(req, week) {
+  const raw = readJson(path.join(RES_DIR(req), `week-${week}.json`), null)
+          ??  readJson(path.join(LEGACY_RES_DIR(req), `week-${week}.json`), null)
+          ??  {};
+  const out = new Map();
+  const arr = Array.isArray(raw.results) ? raw.results : [];
+  for (const r of arr) {
+    const id = String(r.race_id ?? r.id ?? '');
+    if (!id) continue;
+    const first  = toIntOrNull(r.first);
+    const second = toIntOrNull(r.second);
+    out.set(id, { first, second });
+  }
+  return out;
+}
+
+// Predictions: { players:[ {player_id, selections:[{race_id, pick}]} ] } -> Map(pid -> [{race_id, pick}])
+function readHorsesPredictionsMap(req, week) {
+  const raw = readJson(path.join(PRED_DIR(req), `week-${week}.json`), null)
+          ??  readJson(path.join(LEGACY_PRED_DIR(req), `week-${week}.json`), null)
+          ??  {};
+  const map = new Map();
+  const players = Array.isArray(raw.players) ? raw.players : [];
+  for (const p of players) {
+    const pid = String(p.player_id ?? '').trim();
+    if (!pid) continue;
+    const sel = Array.isArray(p.selections) ? p.selections : [];
+    map.set(pid, sel.map(s => ({ race_id: String(s.race_id), pick: toIntOrNull(s.pick) })));
+  }
+  return map;
+}
+
+// Score one race
+function scoreHorsesPick(pick, result, P) {
+  if (!result || pick == null) return 0;
+  return (pick === result.first) ? P.first
+       : (pick === result.second) ? P.second
+       : P.other;
+}
+
+// Compute table for a week — Horses
+function computeHorsesWeekTable(week, predMap, resultsMap, playersIndex, fixturesMap, rules) {
+  const P = rules?.points || { first:3, second:1, other:0 };
+  const table = [];
+  for (const [pid, arr] of predMap.entries()) {
+    let pts = 0;
+    for (const s of arr) {
+      const res = resultsMap.get(s.race_id);
+      pts += scoreHorsesPick(s.pick, res, P);
+    }
+    table.push({
+      player_id: pid,
+      name: playersIndex.get(pid)?.name || '',
+      week_points: pts
+    });
+  }
+  table.sort((a, b) => b.week_points - a.week_points || a.name.localeCompare(b.name));
+  return table;
+}
+
 /* ---------------- Compute helpers ---------------- */
 
 function computeWeekTable(week, predMap, results, playersIndex, fixturesMap) {
+  // (Basketball only)
   const table = []; // [{player_id, name, week_points}]
   for (const [pid, arr] of predMap.entries()) {
     let pts = 0;
@@ -324,19 +419,35 @@ function rebuildSeasonTotalsFromWeeks(req) {
 /* ---------------- Core compute (shared) ---------------- */
 
 function computeAndPersist(req, week) {
-  const predsRaw   = readJson(path.join(PRED_DIR(req), `week-${week}.json`), null)
-                   ?? readJson(path.join(LEGACY_PRED_DIR(req), `week-${week}.json`), null);
-  const resultsRaw = readJson(path.join(RES_DIR(req),  `week-${week}.json`), null)
-                   ?? readJson(path.join(LEGACY_RES_DIR(req),  `week-${week}.json`), null);
-  const fixtures   = readFixturesForWeek(req, week);
+  const rules = readRules(req);
+  const isHorses = String(rules.mode || '').toLowerCase() === 'horses_7x7';
 
-  const predMap  = normalisePredictions(predsRaw);
-  const results  = normaliseResults(resultsRaw);
-
+  // Players index (shared)
   const playersArr = readJson(PLAYERS(req), []);
   const playersIdx = new Map(playersArr.map(p => [String(p.id), { name: p.name || '' }]));
 
-  const weekTable = computeWeekTable(week, predMap, results, playersIdx, fixtures);
+  let weekTable;
+
+  if (isHorses) {
+    // Horses path
+    const fixtures   = readHorsesFixturesForWeek(req, week);
+    const predMap    = readHorsesPredictionsMap(req, week);
+    const resultsMap = readHorsesResultsMap(req, week);
+
+    weekTable = computeHorsesWeekTable(week, predMap, resultsMap, playersIdx, fixtures, rules);
+  } else {
+    // Basketball (default) path
+    const fixtures   = readBasketballFixturesForWeek(req, week);
+    const predsRaw   = readJson(path.join(PRED_DIR(req), `week-${week}.json`), null)
+                     ?? readJson(path.join(LEGACY_PRED_DIR(req), `week-${week}.json`), null);
+    const resultsRaw = readJson(path.join(RES_DIR(req),  `week-${week}.json`), null)
+                     ?? readJson(path.join(LEGACY_RES_DIR(req),  `week-${week}.json`), null);
+
+    const predMap  = normalisePredictions(predsRaw);
+    const results  = normaliseResults(resultsRaw);
+
+    weekTable = computeWeekTable(week, predMap, results, playersIdx, fixtures);
+  }
 
   // Persist weekly scores (competition-scoped + legacy alias in comp folder)
   const weeklyOut = weekTable.map(r => ({
@@ -363,7 +474,7 @@ function computeAndPersist(req, week) {
   const weeklyWithSeason = weeklyOut.map(r => {
     const tot = totalsMap.get(r.player_id);
     return { ...r, seasonTotal: tot ? tot.totalPoints : r.weekPoints };
-    });
+  });
 
   return {
     week,
@@ -389,25 +500,42 @@ router.get('/', (req, res) => {
   const week = clampInt(req.query.week, 1, null);
   if (!week) return res.status(400).json({ ok: false, error: 'week required' });
 
-  const predsRaw   = readJson(path.join(PRED_DIR(req), `week-${week}.json`), null)
-                   ?? readJson(path.join(LEGACY_PRED_DIR(req), `week-${week}.json`), null);
-  const resultsRaw = readJson(path.join(RES_DIR(req),  `week-${week}.json`), null)
-                   ?? readJson(path.join(LEGACY_RES_DIR(req),  `week-${week}.json`), null);
-  const fixtures   = readFixturesForWeek(req, week);
-
-  const predMap  = normalisePredictions(predsRaw);
-  const results  = normaliseResults(resultsRaw);
+  const rules = readRules(req);
+  const isHorses = String(rules.mode || '').toLowerCase() === 'horses_7x7';
 
   const playersArr = readJson(PLAYERS(req), []);
   const playersIdx = new Map(playersArr.map(p => [String(p.id), { name: p.name || '' }]));
 
-  const table = computeWeekTable(week, predMap, results, playersIdx, fixtures);
+  let table, fixturesCount = 0, playerCount = 0;
+
+  if (isHorses) {
+    const fixtures   = readHorsesFixturesForWeek(req, week);
+    const predMap    = readHorsesPredictionsMap(req, week);
+    const resultsMap = readHorsesResultsMap(req, week);
+
+    table = computeHorsesWeekTable(week, predMap, resultsMap, playersIdx, fixtures, rules);
+    fixturesCount = fixtures.size;
+    playerCount = predMap.size;
+  } else {
+    const fixtures   = readBasketballFixturesForWeek(req, week);
+    const predsRaw   = readJson(path.join(PRED_DIR(req), `week-${week}.json`), null)
+                     ?? readJson(path.join(LEGACY_PRED_DIR(req), `week-${week}.json`), null);
+    const resultsRaw = readJson(path.join(RES_DIR(req),  `week-${week}.json`), null)
+                     ?? readJson(path.join(LEGACY_RES_DIR(req),  `week-${week}.json`), null);
+
+    const predMap  = normalisePredictions(predsRaw);
+    const results  = normaliseResults(resultsRaw);
+
+    table = computeWeekTable(week, predMap, results, playersIdx, fixtures);
+    fixturesCount = fixtures.size || Object.keys(results).length;
+    playerCount = predMap.size;
+  }
 
   return res.json({
     ok: true,
     week,
-    fixturesCount: fixtures.size || Object.keys(results).length,
-    playerCount: predMap.size,
+    fixturesCount,
+    playerCount,
     scores: table
   });
 });
@@ -440,19 +568,30 @@ router.get('/week', (req, res) => {
   let saved = true;
 
   if (!Array.isArray(weekly)) {
-    // If not saved yet, compute on the fly (no write)
-    const predsRaw   = readJson(path.join(PRED_DIR(req), `week-${week}.json`), null)
-                     ?? readJson(path.join(LEGACY_PRED_DIR(req), `week-${week}.json`), null);
-    const resultsRaw = readJson(path.join(RES_DIR(req),  `week-${week}.json`), null)
-                     ?? readJson(path.join(LEGACY_RES_DIR(req),  `week-${week}.json`), null);
-    const fixtures   = readFixturesForWeek(req, week);
+    const rules = readRules(req);
+    const isHorses = String(rules.mode || '').toLowerCase() === 'horses_7x7';
 
-    const predMap    = normalisePredictions(predsRaw);
-    const results    = normaliseResults(resultsRaw);
     const playersArr = readJson(PLAYERS(req), []);
     const playersIdx = new Map(playersArr.map(p => [String(p.id), { name: p.name || '' }]));
-    const table      = computeWeekTable(week, predMap, results, playersIdx, fixtures);
-    weekly = table.map(r => ({ player_id: r.player_id, player: r.name, weekPoints: r.week_points }));
+
+    if (isHorses) {
+      const fixtures   = readHorsesFixturesForWeek(req, week);
+      const predMap    = readHorsesPredictionsMap(req, week);
+      const resultsMap = readHorsesResultsMap(req, week);
+      const table      = computeHorsesWeekTable(week, predMap, resultsMap, playersIdx, fixtures, rules);
+      weekly = table.map(r => ({ player_id: r.player_id, player: r.name, weekPoints: r.week_points }));
+    } else {
+      const fixtures   = readBasketballFixturesForWeek(req, week);
+      const predsRaw   = readJson(path.join(PRED_DIR(req), `week-${week}.json`), null)
+                       ?? readJson(path.join(LEGACY_PRED_DIR(req), `week-${week}.json`), null);
+      const resultsRaw = readJson(path.join(RES_DIR(req),  `week-${week}.json`), null)
+                       ?? readJson(path.join(LEGACY_RES_DIR(req),  `week-${week}.json`), null);
+
+      const predMap    = normalisePredictions(predsRaw);
+      const results    = normaliseResults(resultsRaw);
+      const table      = computeWeekTable(week, predMap, results, playersIdx, fixtures);
+      weekly = table.map(r => ({ player_id: r.player_id, player: r.name, weekPoints: r.week_points }));
+    }
     saved = false;
   }
 
@@ -464,6 +603,8 @@ router.get('/summary', (req, res) => {
   res.set('Cache-Control', 'no-store, max-age=0');
   try {
     const week = clampInt(req.query.week, 1, null);
+    const rules = readRules(req);
+    const isHorses = String(rules.mode || '').toLowerCase() === 'horses_7x7';
 
     // Season totals: read or rebuild (and persist) if missing
     let seasonTotals = readJson(path.join(SCO_DIR(req), 'season-totals.json'), null);
@@ -483,18 +624,27 @@ router.get('/summary', (req, res) => {
     if (week != null) {
       weekly = readJson(path.join(SCO_WEEKS(req), `week-${week}.json`), null);
       if (!Array.isArray(weekly)) {
-        const predsRaw   = readJson(path.join(PRED_DIR(req), `week-${week}.json`), null)
-                         ?? readJson(path.join(LEGACY_PRED_DIR(req), `week-${week}.json`), null);
-        const resultsRaw = readJson(path.join(RES_DIR(req),  `week-${week}.json`), null)
-                         ?? readJson(path.join(LEGACY_RES_DIR(req),  `week-${week}.json`), null);
-        const fixtures   = readFixturesForWeek(req, week);
-
-        const predMap    = normalisePredictions(predsRaw);
-        const results    = normaliseResults(resultsRaw);
         const playersArr = readJson(PLAYERS(req), []);
         const playersIdx = new Map(playersArr.map(p => [String(p.id), { name: p.name || '' }]));
-        const table      = computeWeekTable(week, predMap, results, playersIdx, fixtures);
-        weekly = table.map(r => ({ player_id: r.player_id, player: r.name, weekPoints: r.week_points }));
+
+        if (isHorses) {
+          const fixtures   = readHorsesFixturesForWeek(req, week);
+          const predMap    = readHorsesPredictionsMap(req, week);
+          const resultsMap = readHorsesResultsMap(req, week);
+          const table      = computeHorsesWeekTable(week, predMap, resultsMap, playersIdx, fixtures, rules);
+          weekly = table.map(r => ({ player_id: r.player_id, player: r.name, weekPoints: r.week_points }));
+        } else {
+          const fixtures   = readBasketballFixturesForWeek(req, week);
+          const predsRaw   = readJson(path.join(PRED_DIR(req), `week-${week}.json`), null)
+                           ?? readJson(path.join(LEGACY_PRED_DIR(req), `week-${week}.json`), null);
+          const resultsRaw = readJson(path.join(RES_DIR(req),  `week-${week}.json`), null)
+                           ?? readJson(path.join(LEGACY_RES_DIR(req),  `week-${week}.json`), null);
+
+          const predMap    = normalisePredictions(predsRaw);
+          const results    = normaliseResults(resultsRaw);
+          const table      = computeWeekTable(week, predMap, results, playersIdx, fixtures);
+          weekly = table.map(r => ({ player_id: r.player_id, player: r.name, weekPoints: r.week_points }));
+        }
       }
     }
 
@@ -513,7 +663,7 @@ router.get('/summary', (req, res) => {
 });
 
 // ---- Player week breakdown: predictions + results + per-match points (basketball)
-
+// (Unchanged; still basketball-specific.)
 function findPlayerByName(playersArr, name) {
   if (!name) return null;
   const n = String(name).trim().toLowerCase();
@@ -535,7 +685,7 @@ router.get('/player-week', (req, res) => {
   }
   if (!playerId) return res.status(400).json({ ok: false, error: 'player_id or name required' });
 
-  const fixtures = readFixturesForWeek(req, week);
+  const fixtures = readBasketballFixturesForWeek(req, week);
 
   const predsRaw   = readJson(path.join(PRED_DIR(req), `week-${week}.json`), null)
                    ?? readJson(path.join(LEGACY_PRED_DIR(req), `week-${week}.json`), null);
