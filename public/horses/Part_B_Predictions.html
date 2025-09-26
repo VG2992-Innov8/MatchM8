@@ -1,0 +1,122 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>MatchM8 — Horses (7×7)</title>
+  <link rel="stylesheet" href="/public/styles.css">
+  <link rel="stylesheet" href="/public/horses/styles-horses.css">
+  <script defer src="/hero.js"></script>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <style>
+    .wrap {max-width:960px;margin:20px auto;padding:0 12px}
+    .race-card {border:1px solid var(--brand-2);border-radius:14px;padding:14px;margin:10px 0}
+    .title {font-weight:700;margin-right:8px}
+    .row {display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    .row > * {margin:4px 0}
+    .save-bar{position:sticky;bottom:0;background:#fff;border-top:1px solid #ddd;padding:10px}
+  </style>
+</head>
+<body>
+  <div id="hero" data-page="Predictions - Horses"></div>
+  <div class="wrap">
+    <h2>Horses — Week <span id="weekNum"></span></h2>
+    <div id="status"></div>
+    <div id="races"></div>
+    <div class="save-bar">
+      <button class="btn-primary" id="saveBtn">Save Selections</button>
+      <span id="saveMsg" style="margin-left:10px"></span>
+    </div>
+  </div>
+
+<script>
+(function(){
+  const qs = new URLSearchParams(location.search);
+  const T = qs.get("t") || "Horses";
+  const C = qs.get("c") || "7x7-2025";
+  const W = Number(qs.get("week") || "1");
+  document.getElementById("weekNum").textContent = W;
+
+  const playerName = localStorage.getItem("player_name");
+  const playerId   = localStorage.getItem("player_id");
+  if(!playerName || !playerId){
+    document.getElementById("status").innerHTML =
+      "<div class='card' style='padding:10px'>Please log in via the PIN page first.</div>";
+  }
+
+  const racesEl = document.getElementById("races");
+  let fixtures, rules;
+
+  function fmtTime(iso){
+    try{
+      const d = new Date(iso);
+      return d.toUTCString().replace(" GMT","");
+    }catch(e){ return iso; }
+  }
+
+  function lockedFor(race){
+    const buf = (fixtures.buffer_minutes ?? 2);
+    const lockAt = new Date(new Date(race.post_time_utc).getTime() - buf*60000);
+    return Date.now() >= lockAt.getTime();
+  }
+
+  function render(){
+    racesEl.innerHTML = "";
+    (fixtures.races || []).forEach(r => {
+      const isLocked = lockedFor(r);
+      const selectId = "sel_" + r.race_id;
+      const card = document.createElement("div");
+      card.className = "race-card";
+      card.innerHTML = `
+        <div class="row">
+          <span class="title">${r.race_id}: ${r.title}</span>
+          <span>@ ${r.track}</span>
+          <span>⏰ ${fmtTime(r.post_time_utc)}</span>
+          ${isLocked ? `<span class="lock-badge">Locked</span>` : ""}
+        </div>
+        <div class="row">
+          <label for="${selectId}">Your Pick:</label>
+          <select id="${selectId}" ${isLocked ? "disabled":""}>
+            <option value="">-- Select --</option>
+            ${(r.horses||[]).map(h =>
+              `<option value="${h.num}">${h.num} — ${h.name}${h.jockey?` (${h.jockey})`:""}</option>`
+            ).join("")}
+          </select>
+        </div>
+      `;
+      racesEl.appendChild(card);
+    });
+  }
+
+  async function load(){
+    const fx = await fetch(`/api/fixtures?week=${W}&t=${encodeURIComponent(T)}&c=${encodeURIComponent(C)}`);
+    fixtures = await fx.json();
+    render();
+  }
+
+  document.getElementById("saveBtn").addEventListener("click", async ()=>{
+    const selections = (fixtures.races||[]).map(r=>{
+      const el = document.getElementById("sel_"+r.race_id);
+      const val = el ? el.value : "";
+      return { race_id: r.race_id, pick: val ? Number(val) : null };
+    }).filter(x => x.pick !== null);
+
+    // client-side lock guard
+    const late = (fixtures.races||[]).some(r => lockedFor(r) && selections.find(s=>s.race_id===r.race_id));
+    if(late){
+      document.getElementById("saveMsg").textContent = "Some races are locked. Remove locked picks then save.";
+      return;
+    }
+
+    const res = await fetch(`/api/predictions?week=${W}&t=${encodeURIComponent(T)}&c=${encodeURIComponent(C)}`, {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ selections })
+    });
+    document.getElementById("saveMsg").textContent = res.ok ? "Saved ✓" : "Save failed";
+  });
+
+  load();
+})();
+</script>
+</body>
+</html>
