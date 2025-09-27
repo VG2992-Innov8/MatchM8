@@ -64,24 +64,7 @@ const fetchFn = (...args) =>
 // ⬇️ legacy global license bypass flag (dev/demo)
 const SKIP_LICENSE = String(process.env.DEMO_SKIP_LICENSE || '').toLowerCase() === 'true';
 
-/* -------------------- Per-request TENANT + COMPETITION context --------------------
- * TENANT selection rules (priority):
- * 1) TENANT_MAP JSON env maps request hostname -> tenant slug
- * 2) ALLOW_TENANT_OVERRIDE=true lets you pass ?t=TENANT or header x-tenant: TENANT
- * 3) TENANT env fallback
- * 4) 'default'
- *
- * COMPETITION selection rules (priority):
- * 1) URL ?c=<COMPETITION> (e.g., EPL-2025, BUNDES-2025, A-LEAGUE-2025)
- * 2) tenant-level config.json { "defaultCompetition": "EPL-2025" }
- * 3) DEFAULT_COMP env
- * 4) "EPL-2025"
- *
- * Data root for request = <DATA_DIR>/tenants/<TENANT>/competitions/<COMP>/  (if COMP chosen)
- * Otherwise legacy root = <DATA_DIR>/tenants/<TENANT>/
- *
- * We set req.ctx = { tenant, comp, tenantDir, compDir, dataDir } for downstream routes.
- */
+/* -------------------- Per-request TENANT + COMPETITION context -------------------- */
 function parseTenantMap() { try { return JSON.parse(process.env.TENANT_MAP || '{}'); } catch { return {}; } }
 function sanitizeSlug(s) { return String(s || '').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 64); }
 
@@ -264,10 +247,6 @@ function requireValidLicense(_req, res, next) {
 }
 
 /* -------------------- Per-tenant signed license (HMAC) -------------------- */
-/* Token format:
- * token = base64url(JSON payload) + "." + base64url(HMAC_SHA256(payload, LICENSE_SECRET))
- * claims example: { tenant:"GEEVES-2025", plan:"Starter", seats:5, exp:"2026-01-01T00:00:00Z" }
- */
 function b64urlEncode(bufOrStr) {
   const b = Buffer.isBuffer(bufOrStr) ? bufOrStr : Buffer.from(String(bufOrStr));
   return b.toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
@@ -416,7 +395,10 @@ app.use('/data/scores',   express.static(joinData('scores')));
 app.use('/data/fixtures', express.static(joinData('fixtures')));
 
 // Public assets
-app.use(express.static(joinRepo('public')));
+// NOTE: we expose ./public at BOTH root and /public to cover existing links
+app.use(express.static(joinRepo('public')));                 // -> /horses/..., /Part_*...
+app.use('/public', express.static(joinRepo('public')));      // -> /public/horses/...
+app.use('/horses', express.static(joinRepo('public', 'horses'))); // convenience alias
 app.use('/ui', express.static(joinRepo('ui')));
 
 // Fix old encoded URLs (legacy)
@@ -446,12 +428,10 @@ app.post('/api/config', requireAdminToken, (req, res) => {
 });
 
 /* -------------------- Tenant license endpoints (TENANT-LEVEL) -------------------- */
-// Public status for current tenant
 app.get('/api/tenant/license/status', (req, res) => {
   const v = getTenantLicenseClaims(req);
   res.json({ ok: v.ok, reason: v.reason || 'ok', claims: v.claims || null });
 });
-// Admin: apply/update tenant license token (writes to TENANT ROOT config.json)
 app.post('/api/tenant/license/apply', requireAdminToken, express.json(), (req, res) => {
   const token = String(req.body?.token || '').trim();
   if (!token) return res.status(400).json({ ok:false, error:'missing token' });
@@ -459,7 +439,6 @@ app.post('/api/tenant/license/apply', requireAdminToken, express.json(), (req, r
   const v = getTenantLicenseClaims(req);
   res.json({ ok: v.ok, reason: v.reason || 'ok', claims: v.claims || null });
 });
-// (Optional) set defaultCompetition at tenant level
 app.post('/api/tenant/default-competition', requireAdminToken, express.json(), (req, res) => {
   const val = String(req.body?.defaultCompetition || '').trim();
   writeTenantConfigFor(req, { defaultCompetition: val });
