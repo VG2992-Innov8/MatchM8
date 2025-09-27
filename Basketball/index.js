@@ -152,6 +152,21 @@ const joinRepo = (...p) => path.join(__dirname, ...p);
 const joinData = (...p) => path.join(DATA_DIR, ...p);
 const CONFIG_PATH = joinData('config.json'); // global legacy (not per-tenant)
 
+// Serve static from BOTH Basketball/public and repo-root /public
+const PARENT_PUBLIC = path.resolve(__dirname, '..', 'public');
+const HERE_PUBLIC   = path.resolve(__dirname, 'public');
+
+function publicExists(relPath) {
+  return fs.existsSync(path.join(HERE_PUBLIC, relPath)) || fs.existsSync(path.join(PARENT_PUBLIC, relPath));
+}
+function sendPublic(res, relPath) {
+  const here   = path.join(HERE_PUBLIC, relPath);
+  const parent = path.join(PARENT_PUBLIC, relPath);
+  if (fs.existsSync(here))   return res.sendFile(here);
+  if (fs.existsSync(parent)) return res.sendFile(parent);
+  return res.status(404).send('Not Found');
+}
+
 // --- config defaults used if data/config.json is missing ---
 const DEFAULT_CONFIG = {
   season: 2025,
@@ -394,11 +409,13 @@ app.get(/^\/data\/(fixtures|results|scores)\/(.+)$/, (req, res, next) => {
 app.use('/data/scores',   express.static(joinData('scores')));
 app.use('/data/fixtures', express.static(joinData('fixtures')));
 
-// Public assets
-// NOTE: we expose ./public at BOTH root and /public to cover existing links
-app.use(express.static(joinRepo('public')));                 // -> /horses/..., /Part_*...
-app.use('/public', express.static(joinRepo('public')));      // -> /public/horses/...
-app.use('/horses', express.static(joinRepo('public', 'horses'))); // convenience alias
+// ----- Public assets (serve both Basketball/public and repo-root public) -----
+app.use(express.static(HERE_PUBLIC));
+app.use(express.static(PARENT_PUBLIC));                 // repo root /public
+app.use('/public', express.static(HERE_PUBLIC));
+app.use('/public', express.static(PARENT_PUBLIC));
+app.use('/horses', express.static(path.join(HERE_PUBLIC, 'horses')));
+app.use('/horses', express.static(path.join(PARENT_PUBLIC, 'horses')));
 app.use('/ui', express.static(joinRepo('ui')));
 
 // Fix old encoded URLs (legacy)
@@ -605,8 +622,9 @@ app.get('/api/__routes', (_req, res) => res.json(mounted));
   'Part_E_Matrix.html',
   'admin.html'
 ].forEach(page => {
-  app.get('/' + page, (_req, res) => res.sendFile(joinRepo('public', page)));
+  app.get('/' + page, (_req, res) => sendPublic(res, page));
 });
+
 
 /* -------------------- Root -------------------- */
 app.get('/', (_req, res) => res.sendFile(joinRepo('public', 'Part_A_PIN.html')));
