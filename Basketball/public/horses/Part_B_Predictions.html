@@ -1,121 +1,190 @@
 ﻿<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <title>MatchM8 — Horses (7×7)</title>
-  <link rel="stylesheet" href="/public/styles.css">
-  <link rel="stylesheet" href="/public/horses/styles-horses.css">
-  <script defer src="/hero.js"></script>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <meta charset="utf-8" />
+  <title>MatchM8 — Horses — Predictions</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/horses/styles-horses.css" />
   <style>
-    .wrap {max-width:960px;margin:20px auto;padding:0 12px}
-    .race-card {border:1px solid var(--brand-2);border-radius:14px;padding:14px;margin:10px 0}
-    .title {font-weight:700;margin-right:8px}
-    .row {display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-    .row > * {margin:4px 0}
-    .save-bar{position:sticky;bottom:0;background:#fff;border-top:1px solid #ddd;padding:10px}
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background:#eaf2f9; margin:0; }
+    .wrap { max-width: 960px; margin: 32px auto; padding: 0 16px; }
+    h1,h2,h3 { margin: 0 0 16px; }
+    .row { display: grid; grid-template-columns: 110px 1fr; gap: 10px; align-items: center; margin: 8px 0; }
+    select { padding: 8px; font-size: 14px; }
+    .btn { background: var(--brand-2); color: #fff; border: 0; padding: 10px 14px; border-radius: 6px; cursor: pointer; }
+    .btn:disabled { opacity:.5; cursor:not-allowed; }
+    .card { border: 1px solid var(--brand-2); background: var(--brand-3); padding: 12px; border-radius: 8px; margin: 12px 0; }
+    .muted { color:#345; opacity:.8; font-size: .9rem; }
+    .grid { display:grid; gap:12px; }
+    .err { color:#b00020; }
+    .ok  { color:#0b7a0b; }
   </style>
 </head>
 <body>
-  <div id="hero" data-page="Predictions - Horses"></div>
   <div class="wrap">
-    <h2>Horses — Week <span id="weekNum"></span></h2>
-    <div id="status"></div>
-    <div id="races"></div>
-    <div class="save-bar">
-      <button class="btn-primary" id="saveBtn">Save Selections</button>
-      <span id="saveMsg" style="margin-left:10px"></span>
+    <h1 style="text-align:center;margin-bottom:8px;">MatchM8</h1>
+    <h2 style="text-align:center;margin-bottom:24px;">Horses</h2>
+    <div class="card">
+      <div class="grid">
+        <div class="row"><strong>Week</strong> <span id="wk">…</span></div>
+        <div class="row"><strong>Tenant</strong> <span id="tenant">…</span></div>
+        <div class="row"><strong>Competition</strong> <span id="comp">…</span></div>
+        <div class="row">
+          <strong>Your Name</strong>
+          <input id="playerName" placeholder="e.g. Vince" style="padding:8px;border-radius:6px;border:1px solid #aaa;max-width:280px;">
+        </div>
+      </div>
     </div>
+
+    <h3 style="margin-top:20px;">Horses — Week <span id="wk2">…</span></h3>
+    <div id="races"></div>
+
+    <div style="margin-top:16px;">
+      <button id="saveBtn" class="btn">Save Selections</button>
+      <span id="saveMsg" class="muted" style="margin-left:10px;"></span>
+    </div>
+
+    <p class="muted" style="margin-top:20px;">
+      Picks lock 1–2 minutes before each race (or at first kickoff depending on settings).
+    </p>
+
+    <div id="debug" class="muted"></div>
   </div>
 
 <script>
-(function(){
+(function() {
   const qs = new URLSearchParams(location.search);
-  const T = qs.get("t") || "Horses";
-  const C = qs.get("c") || "7x7-2025";
-  const W = Number(qs.get("week") || "1");
-  document.getElementById("weekNum").textContent = W;
+  const ctx = {
+    t: qs.get('t') || 'Horses',
+    c: qs.get('c') || '7x7-2025',
+    week: parseInt(qs.get('week') || '1', 10) || 1
+  };
+  document.getElementById('wk').textContent = ctx.week;
+  document.getElementById('wk2').textContent = ctx.week;
+  document.getElementById('tenant').textContent = ctx.t;
+  document.getElementById('comp').textContent = ctx.c;
 
-  const playerName = localStorage.getItem("player_name");
-  const playerId   = localStorage.getItem("player_id");
-  if(!playerName || !playerId){
-    document.getElementById("status").innerHTML =
-      "<div class='card' style='padding:10px'>Please log in via the PIN page first.</div>";
-  }
-
-  const racesEl = document.getElementById("races");
-  let fixtures, rules;
-
-  function fmtTime(iso){
-    try{
-      const d = new Date(iso);
-      return d.toUTCString().replace(" GMT","");
-    }catch(e){ return iso; }
-  }
-
-  function lockedFor(race){
-    const buf = (fixtures.buffer_minutes ?? 2);
-    const lockAt = new Date(new Date(race.post_time_utc).getTime() - buf*60000);
-    return Date.now() >= lockAt.getTime();
-  }
-
-  function render(){
-    racesEl.innerHTML = "";
-    (fixtures.races || []).forEach(r => {
-      const isLocked = lockedFor(r);
-      const selectId = "sel_" + r.race_id;
-      const card = document.createElement("div");
-      card.className = "race-card";
-      card.innerHTML = `
-        <div class="row">
-          <span class="title">${r.race_id}: ${r.title}</span>
-          <span>@ ${r.track}</span>
-          <span>⏰ ${fmtTime(r.post_time_utc)}</span>
-          ${isLocked ? `<span class="lock-badge">Locked</span>` : ""}
-        </div>
-        <div class="row">
-          <label for="${selectId}">Your Pick:</label>
-          <select id="${selectId}" ${isLocked ? "disabled":""}>
-            <option value="">-- Select --</option>
-            ${(r.horses||[]).map(h =>
-              `<option value="${h.num}">${h.num} — ${h.name}${h.jockey?` (${h.jockey})`:""}</option>`
-            ).join("")}
-          </select>
-        </div>
-      `;
-      racesEl.appendChild(card);
-    });
-  }
-
-  async function load(){
-    const fx = await fetch(`/api/fixtures?week=${W}&t=${encodeURIComponent(T)}&c=${encodeURIComponent(C)}`);
-    fixtures = await fx.json();
-    render();
-  }
-
-  document.getElementById("saveBtn").addEventListener("click", async ()=>{
-    const selections = (fixtures.races||[]).map(r=>{
-      const el = document.getElementById("sel_"+r.race_id);
-      const val = el ? el.value : "";
-      return { race_id: r.race_id, pick: val ? Number(val) : null };
-    }).filter(x => x.pick !== null);
-
-    // client-side lock guard
-    const late = (fixtures.races||[]).some(r => lockedFor(r) && selections.find(s=>s.race_id===r.race_id));
-    if(late){
-      document.getElementById("saveMsg").textContent = "Some races are locked. Remove locked picks then save.";
-      return;
-    }
-
-    const res = await fetch(`/api/predictions?week=${W}&t=${encodeURIComponent(T)}&c=${encodeURIComponent(C)}`, {
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({ selections })
-    });
-    document.getElementById("saveMsg").textContent = res.ok ? "Saved ✓" : "Save failed";
+  // Simple local name memory (like soccer/basketball)
+  const nameInput = document.getElementById('playerName');
+  nameInput.value = localStorage.getItem('mm8.playerName') || '';
+  nameInput.addEventListener('change', () => {
+    localStorage.setItem('mm8.playerName', nameInput.value.trim());
   });
 
-  load();
+  // Render helpers
+  const racesDiv = document.getElementById('races');
+  const saveBtn  = document.getElementById('saveBtn');
+  const saveMsg  = document.getElementById('saveMsg');
+  const dbg      = document.getElementById('debug');
+
+  function el(tag, attrs={}, ...kids) {
+    const n = document.createElement(tag);
+    for (const [k,v] of Object.entries(attrs)) {
+      if (k === 'class') n.className = v;
+      else if (k === 'html') n.innerHTML = v;
+      else n.setAttribute(k, v);
+    }
+    for (const k of kids) n.appendChild(typeof k === 'string' ? document.createTextNode(k) : k);
+    return n;
+  }
+
+  // Load fixtures (7 races with options)
+  async function loadFixtures() {
+    const url = `/api/fixtures?week=${ctx.week}&t=${encodeURIComponent(ctx.t)}&c=${encodeURIComponent(ctx.c)}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('fixtures ' + res.status);
+    const data = await res.json().catch(()=>null);
+    // Accept either array or map format
+    // Expected horse format per race item:
+    // { id:"R1", raceName:"Race 1", options:[ { id:"H12", label:"Horse — Jockey" }, ... ] }
+    let arr = [];
+    if (Array.isArray(data)) arr = data;
+    else if (data && Array.isArray(data.fixtures)) arr = data.fixtures;
+    else if (data && typeof data === 'object') {
+      arr = Object.keys(data).map(id => ({ id, ...(data[id]||{}) }));
+    }
+    return arr;
+  }
+
+  function renderRaces(fixtures) {
+    racesDiv.innerHTML = '';
+    if (!fixtures.length) {
+      racesDiv.appendChild(el('div', {class:'muted'}, 'No fixtures for this week yet.'));
+      return;
+    }
+    fixtures.slice(0,7).forEach((fx, i) => {
+      const label = fx.raceName || `Race ${i+1}`;
+      const opts  = Array.isArray(fx.options) ? fx.options : [];
+      const sel = el('select', { id:`race-${fx.id}` });
+      sel.appendChild(el('option', { value:'' }, '— select —'));
+      for (const o of opts) {
+        sel.appendChild(el('option', { value:String(o.id||o.code||o.name) }, String(o.label||o.name||o.id)));
+      }
+      racesDiv.appendChild(el('div', { class:'row' },
+        el('strong', {}, label),
+        sel
+      ));
+    });
+  }
+
+  async function main() {
+    try {
+      const fixtures = await loadFixtures();
+      renderRaces(fixtures);
+      dbg.textContent = '';
+    } catch (e) {
+      dbg.innerHTML = `<span class="err">Failed to load fixtures: ${e.message}</span>`;
+    }
+  }
+
+  saveBtn.addEventListener('click', async () => {
+    saveMsg.textContent = '';
+    const name = (nameInput.value || '').trim();
+    if (!name) { saveMsg.textContent = 'Enter your name first.'; return; }
+
+    // Collect picks
+    const selects = racesDiv.querySelectorAll('select[id^=race-]');
+    const predictions = [];
+    selects.forEach(sel => {
+      const id = sel.id.replace('race-','');
+      const pick = sel.value || null;
+      if (pick) predictions.push({ id, pick });
+    });
+
+    // Nothing selected?
+    if (!predictions.length) { saveMsg.textContent = 'No selections yet.'; return; }
+
+    // Payload shape (generic; works with our predictions normaliser storing per-player arrays)
+    const body = {
+      week: ctx.week,
+      player: { name },                 // server will map this to a player_id (existing players.json) or store by name
+      predictions
+    };
+
+    // Try the standard endpoint first
+    try {
+      const res = await fetch(`/api/predictions/upsert?t=${encodeURIComponent(ctx.t)}&c=${encodeURIComponent(ctx.c)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) throw new Error('save ' + res.status);
+      saveMsg.textContent = 'Saved.';
+      saveMsg.className = 'ok';
+    } catch (e) {
+      // Fallback: download the JSON so you can drop it onto the server manually
+      console.warn('upsert failed, offering download', e);
+      const blob = new Blob([JSON.stringify(body, null, 2)], {type:'application/json'});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `horses-week-${ctx.week}-predictions-${name}.json`;
+      a.click();
+      saveMsg.innerHTML = 'Couldn’t reach save endpoint; downloaded your picks instead.';
+      saveMsg.className = 'err';
+    }
+  });
+
+  main();
 })();
 </script>
 </body>
