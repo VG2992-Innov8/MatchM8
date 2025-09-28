@@ -746,6 +746,39 @@ app.get('/api/__routes', (_req, res) => res.json(mounted));
 /* -------------------- Root -------------------- */
 app.get('/', (_req, res) => res.sendFile(joinRepo('public', 'Part_A_PIN.html')));
 
+const PUB_SOCCER = path.resolve(__dirname, 'public');
+const PUB_BBALL  = path.resolve(__dirname, '..', 'Basketball', 'public'); // sibling app
+const PUB_ROOT   = path.resolve(__dirname, '..', 'public');               // repo-root, optional
+
+// Mount *all* of them. Order matters: first hit wins.
+[ PUB_SOCCER, PUB_BBALL, PUB_ROOT ].forEach(dir => {
+  if (fs.existsSync(dir)) {
+    app.use(express.static(dir));
+    app.use('/public', express.static(dir));
+    // convenience: allow /horses/... regardless of which folder it lives in
+    app.use('/horses', express.static(path.join(dir, 'horses')));
+  }
+});
+
+// If you have direct routes for specific pages:
+[
+  'Part_A_PIN.html',
+  'Part_B_Predictions.html',
+  'Part_D_Scoring.html',
+  'Part_E_Season.html',
+  'Part_E_Matrix.html',
+  'admin.html'
+].forEach(page => {
+  app.get('/' + page, (_req, res) => {
+    // try each public folder in order
+    for (const base of [PUB_SOCCER, PUB_BBALL, PUB_ROOT]) {
+      const p = path.join(base, page);
+      if (fs.existsSync(p)) return res.sendFile(p);
+    }
+    res.status(404).send('Not Found');
+  });
+});
+
 /* -------------------- Listen -------------------- */
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`MatchM8 listening on port ${PORT} (mode=${APP_MODE})`);
