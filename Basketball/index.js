@@ -629,6 +629,18 @@ app.get('/api/__routes', (_req, res) => res.json(mounted));
 /* -------------------- Root -------------------- */
 app.get('/', (_req, res) => res.sendFile(joinRepo('public', 'Part_A_PIN.html')));
 
+// DEBUG: list what's in Basketball/public/horses (remove after testing)
+app.get('/api/debug/ls-horses', (_req, res) => {
+  try {
+    const dir = path.join(HERE_PUBLIC, 'horses');
+    const items = fs.existsSync(dir) ? fs.readdirSync(dir) : [];
+    res.json({ dir, items });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+
 /* -------------------- Listen -------------------- */
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`MatchM8 listening on port ${PORT} (mode=${APP_MODE})`);
