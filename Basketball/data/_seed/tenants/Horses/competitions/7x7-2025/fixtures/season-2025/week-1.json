@@ -1,0 +1,66 @@
+[
+  {
+    "id": "R1",
+    "raceName": "Race 1",
+    "options": [
+      { "id": "R1H1", "label": "Sky Rocket — A. Rider" },
+      { "id": "R1H2", "label": "Green Flash — B. Jockey" },
+      { "id": "R1H3", "label": "Night Runner — T. Berry" }
+    ]
+  },
+  {
+    "id": "R2",
+    "raceName": "Race 2",
+    "options": [
+      { "id": "R2H1", "label": "Silver Mist — C. Rider" },
+      { "id": "R2H2", "label": "River Mist — C. Williams" },
+      { "id": "R2H3", "label": "Quickstep — K. O'Hara" }
+    ]
+  },
+  {
+    "id": "R3",
+    "raceName": "Race 3",
+    "options": [
+      { "id": "R3H1", "label": "Storm Parade — D. Lane" },
+      { "id": "R3H2", "label": "Iron Will — M. Dee" },
+      { "id": "R3H3", "label": "Golden Vale — R. Maloney" }
+    ]
+  },
+  {
+    "id": "R4",
+    "raceName": "Race 4",
+    "options": [
+      { "id": "R4H1", "label": "Silver Fern — L. Currie" },
+      { "id": "R4H2", "label": "Jetstream — J. McNeil" },
+      { "id": "R4H3", "label": "Wild Colony — B. Mertens" }
+    ]
+  },
+  {
+    "id": "R5",
+    "raceName": "Race 5",
+    "options": [
+      { "id": "R5H1", "label": "Red Rumour — Z. Spain" },
+      { "id": "R5H2", "label": "Mint Condition — C. Graham" },
+      { "id": "R5H3", "label": "Kings Road — H. Bowman" }
+    ]
+  },
+  {
+    "id": "R6",
+    "raceName": "Race 6",
+    "options": [
+      { "id": "R6H1", "label": "Harbour Light — J. Kah" },
+      { "id": "R6H2", "label": "Desert Echo — W. Pike" },
+      { "id": "R6H3", "label": "Rising Tide — B. Thompson" }
+    ]
+  },
+  {
+    "id": "R7",
+    "raceName": "Race 7",
+    "options": [
+      { "id": "R7H1", "label": "Green Machine — T. Clark" },
+      { "id": "R7H2", "label": "Proper Legend — N. Rawiller" },
+      { "id": "R7H3", "label": "Arcadian — R. King" }
+    ]
+  }
+]
+

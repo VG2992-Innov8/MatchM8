@@ -1,11 +1,32 @@
-node_modules/
-_backup/
-_clean/
-_diag_bundle/
-Soccer/data/
-Basketball/data/
-Soccer/node_modules/
-Basketball/node_modules/
+# --- Node deps anywhere
+**/node_modules/
+
+# --- Local env files
+.env
+.env.*
+
+# --- Logs & archives
 *.log
 *.zip
-.env
+
+# --- Editor / temp
+.vscode/
+.tmp/
+
+# --- Backups & diagnostics
+_backup/
+_backups/
+_clean/
+_diag_bundle/
+
+# --- Runtime data (do NOT track). Keep seed data + README so folders exist.
+
+# Basketball app data
+Basketball/data/**
+!Basketball/data/_seed/**
+!Basketball/data/README.md
+
+# Soccer app data (future-proof — same pattern)
+Soccer/data/**
+!Soccer/data/_seed/**
+!Soccer/data/README.md
