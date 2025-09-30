@@ -343,6 +343,13 @@ app.use(express.urlencoded({ extended: false }));
 // 🔑 Per-request TENANT + COMP context
 app.use(tenantMiddleware);
 
+// 🔰 Seed-on-missing for this tenant+competition (uses Basketball/data/_seed)
+const { ensureSeedsFor } = require('./seed');
+app.use((req, _res, next) => {
+  try { ensureSeedsFor(req.ctx.tenantDir, req.ctx.dataDir); } catch {}
+  next();
+});
+
 // Health
 app.get('/health', (_req, res) => res.json({ ok: true, mode: APP_MODE, ts: Date.now() }));
 app.get('/healthz', (_req, res) => res.status(200).send('ok'));
@@ -613,6 +620,12 @@ app.get('/api/__health', (req, res) =>
 );
 app.get('/api/__routes', (_req, res) => res.json(mounted));
 
+/* -------------------- Admin seed trigger (optional) -------------------- */
+app.post('/api/admin/ensure-seeds', requireAdminToken, (req, res) => {
+  const seeded = !!ensureSeedsFor(req.ctx.tenantDir, req.ctx.dataDir);
+  res.json({ ok: true, seeded });
+});
+
 /* -------------------- Map UI pages -------------------- */
 [
   'Part_A_PIN.html',
@@ -625,9 +638,8 @@ app.get('/api/__routes', (_req, res) => res.json(mounted));
   app.get('/' + page, (_req, res) => sendPublic(res, page));
 });
 
-
 /* -------------------- Root -------------------- */
-app.get('/', (_req, res) => res.sendFile(joinRepo('public', 'Part_A_PIN.html')));
+app.get('/', (_req, res) => sendPublic(res, 'Part_A_PIN.html'));
 
 // DEBUG: list what's in Basketball/public/horses (remove after testing)
 app.get('/api/debug/ls-horses', (_req, res) => {
@@ -639,7 +651,6 @@ app.get('/api/debug/ls-horses', (_req, res) => {
     res.status(500).json({ error: String(e) });
   }
 });
-
 
 /* -------------------- Listen -------------------- */
 app.listen(PORT, '0.0.0.0', () => {
