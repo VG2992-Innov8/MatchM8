@@ -1,4 +1,4 @@
-// sanity: edited on 2025-09-29
+// sanity: edited on 2025-09-29 at 11:08
 // index.js — MatchM8 server (prod-ready with ephemeral fallback + seeding + per-request tenant+competition meta)
 const fs   = require('fs');
 const path = require('path');
