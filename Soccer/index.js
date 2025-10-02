@@ -696,8 +696,15 @@ app.get('/api/admin/license/status', requireAdminToken, (_req, res) => {
 });
 
 // ---- Admin auth (mounted BEFORE other /api/admin routes) ----
-const adminAuth = require('./routes/admin_auth');
-app.use('/api/admin', adminAuth);
+{
+  const adminAuth = safeRequire('./routes/admin_auth.js', './routes/admin_auth');
+  if (adminAuth.ok) {
+    app.use('/api/admin', adminAuth.mod);
+    mounted.push({ label: './routes/admin_auth.js', route: '/api/admin' });
+  } else {
+    console.warn('Skipping ./routes/admin_auth.js:', (adminAuth.reason || 'not found'));
+  }
+}
 
 // ---- Admin routes ----
 const admin = safeRequire('./routes/admin.js', './routes/admin');
