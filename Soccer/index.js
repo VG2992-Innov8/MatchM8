@@ -313,7 +313,6 @@ app.use(cookieParser());
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false }));
 
-
 function getWeekFromReq(req) {
   // query
   if (req?.query?.week != null) {
@@ -426,6 +425,13 @@ function tenantMiddleware(req, _res, next) {
 }
 // 🔑 Per-request TENANT + COMP context (now finals-aware via week)
 app.use(tenantMiddleware);
+
+// 🔰 Seed-on-missing for this tenant+competition (uses Soccer/data/_seed)
+const { ensureSeedsFor } = require('./seed');
+app.use((req, _res, next) => {
+  try { ensureSeedsFor(req.ctx.tenantDir, req.ctx.dataDir); } catch {}
+  next();
+});
 
 // Health
 app.get('/health', (_req, res) => res.json({ ok: true, mode: APP_MODE, ts: Date.now() }));
@@ -704,6 +710,12 @@ const adminTools = safeRequire('./routes/admin_clear.js', './routes/admin_clear'
 if (adminTools.ok) {
   mount('./routes/admin_clear.js', '/api/admin', adminTools.mod);
 }
+
+// ---- Admin seed trigger (optional) ----
+app.post('/api/admin/ensure-seeds', requireAdminToken, (req, res) => {
+  const seeded = !!ensureSeedsFor(req.ctx.tenantDir, req.ctx.dataDir);
+  res.json({ ok: true, seeded });
+});
 
 // ---- Locks route — tenant-gated (DEMO_SKIP_LICENSE bypass handled in middleware) ----
 {
