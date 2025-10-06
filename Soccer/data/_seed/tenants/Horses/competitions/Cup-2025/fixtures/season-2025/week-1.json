@@ -1,0 +1,14 @@
+[
+  {
+    "id": "race1",
+    "home": "Farlap",
+    "away": "Desert King",
+    "kickoff_iso": "2025-11-04T03:00:00Z"
+  },
+  {
+    "id": "race2",
+    "home": "Makybe",
+    "away": "So You Think",
+    "kickoff_iso": "2025-11-04T03:40:00Z"
+  }
+]
