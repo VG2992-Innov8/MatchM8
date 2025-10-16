@@ -338,4 +338,126 @@ if (addBtn) {
     if (typeof bulkAddRows === "function") bulkAddRows(5);
   }, true); // capture phase to beat the existing listener
 }
+(function () {
+  const slug = new URLSearchParams(location.search).get("t") || "";
+  if (slug.toLowerCase() !== "horses") return;
+
+  function ensureRaceCard() {
+    const strong = [...document.querySelectorAll("strong")]
+      .find(el => (el.textContent||"").toLowerCase().includes("add fixtures"));
+    const table = document.querySelector("#addFixturesTbl");
+    if (!strong || !table) return false;
+
+    // Header: # | Course | Time | Runners (hide Date)
+    const th = table.querySelectorAll("thead tr th");
+    if (th.length >= 5) {
+      th[1].textContent = "Course";
+      th[2].textContent = "Time";
+      th[3].textContent = "Runners";
+      th[3].style.display = "none"; // hide Date
+    }
+
+    // Transform rows
+    const rows = table.querySelectorAll("tbody tr");
+    rows.forEach((tr, i) => {
+      const td = tr.querySelectorAll("td");
+      if (td.length < 5) return;
+
+      // Course
+      const home = td[1].querySelector("input,textarea");
+      if (home) { home.type = "text"; home.placeholder = "e.g., Flemington"; home.classList.add("rc-course"); }
+
+      // Hide Date
+      td[3].style.display = "none";
+
+      // Time
+      td[4].innerHTML = '<input class="rc-time" type="datetime-local">';
+
+      // Runners
+      td[2].innerHTML = '';
+      const ta = document.createElement('textarea');
+      ta.className = 'rc-runners'; ta.rows = 4;
+      ta.placeholder = '1. Horse Name\n2. Next Horse\n3. ...';
+      td[2].appendChild(ta);
+
+      tr.dataset.race = String(i+1);
+    });
+
+    // Limit to exactly 5 rows
+    const tbody = table.tBodies[0];
+    if (tbody) {
+      while (tbody.rows.length > 5) tbody.deleteRow(-1);
+      while (tbody.rows.length < 5) {
+        // trigger existing add-rows to keep styles consistent
+        if (typeof window.bulkAddRows === 'function') window.bulkAddRows(1);
+        else {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${tbody.rows.length+1}</td>
+            <td><input class="input rc-course" type="text" placeholder="e.g., Flemington"></td>
+            <td><textarea class="input rc-runners" rows="4" placeholder="1. Horse Name\n2. Next Horse"></textarea></td>
+            <td style="display:none"></td>
+            <td><input class="rc-time" type="datetime-local"></td>`;
+          tbody.appendChild(tr);
+        }
+      }
+    }
+
+    // Button: Add 5 Rows (override old handler)
+    const addBtn = document.getElementById('btnBulkAddRows');
+    if (addBtn) {
+      addBtn.textContent = 'Add 5 Rows';
+      addBtn.addEventListener('click', (e) => {
+        e.stopImmediatePropagation(); e.preventDefault();
+        if (typeof window.bulkAddRows === 'function') window.bulkAddRows(5);
+        setTimeout(ensureRaceCard, 0); // re-transform new rows
+      }, true);
+    }
+
+    // Hide "Submit Fixtures"; add Save Race Card
+    const box = strong.closest('div,section,fieldset') || strong.parentElement;
+    const old = [...box.querySelectorAll('button,input[type=submit]')]
+      .find(b => (b.textContent||b.value||'').toLowerCase().includes('submit fixtures'));
+    if (old) old.style.display = 'none';
+
+    let save = box.querySelector('#save-racecard');
+    if (!save) {
+      save = document.createElement('button');
+      save.id = 'save-racecard'; save.type = 'button';
+      save.textContent = 'Save Race Card'; save.className = 'btn primary';
+      save.style.marginTop = '10px'; box.appendChild(save);
+      save.onclick = async () => {
+        const leg = Number(document.getElementById('week')?.value || 1);
+        const bodyRows = [...table.querySelectorAll('tbody tr')].slice(0,5);
+        const races = bodyRows.map((tr, idx) => {
+          const num = idx+1;
+          const course = tr.querySelector('.rc-course')?.value?.trim() || null;
+          const dt = tr.querySelector('.rc-time')?.value || '';
+          const start = dt ? new Date(dt).toISOString() : null;
+          const runners = (tr.querySelector('.rc-runners')?.value || '')
+            .split(/\r?\n/).map(s=>s.trim()).filter(Boolean)
+            .map(s=>s.replace(/^\d+\s*[\.\-\)]\s*/,''));
+          return { num, name:`Race ${num}`, course, start,
+            status:'scheduled', result:{win:null,place2:null,place3:null}, runners };
+        });
+        const res = await fetch(`/api/horse/legs/${leg}/races?t=${encodeURIComponent(slug)}`, {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ leg, status:'scheduled', races })
+        });
+        if (!res.ok) return alert('Failed to save race card.');
+        alert('Race card saved.');
+      };
+    }
+
+    // Canary
+    strong.textContent = 'Build Race Card (Leg) — HORSES';
+    return true;
+  }
+
+  // Reapply whenever the table changes (the app re-renders it)
+  const target = document.getElementById('addFixturesTbl');
+  const applyNow = () => { ensureRaceCard(); };
+  const obs = new MutationObserver(() => ensureRaceCard());
+  if (target) obs.observe(target, { childList: true, subtree: true });
+  applyNow();
+})();
 })();
