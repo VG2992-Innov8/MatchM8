@@ -15,6 +15,7 @@ _diag_bundle/
 # keep a README so the folder exists in the repo
 /data/*
 !/data/README.md
+
 # allow Basketball demo data
 !/data/tenants/
 !/data/tenants/Basketball/
@@ -25,16 +26,13 @@ _diag_bundle/
 !/data/tenants/Basketball/competitions/NBL-2025-Finals/**
 !/data/tenants/Basketball/config.json
 
+# --- allow Horses tenant (keep data in repo / Render)
+!/data/tenants/Horses/
+!/data/tenants/Horses/**/*
+
 # --- allow Horses seed data ---
 !/data/_seed/
 !/data/_seed/**
-
-# (optional) allow checked-in Horses demo/tenant data
-!/data/tenants/Horses/
-!/data/tenants/Horses/config.json
-!/data/tenants/Horses/competitions/
-!/data/tenants/Horses/competitions/Cup-2025/**
-
 
 _clean/
 *.zip
