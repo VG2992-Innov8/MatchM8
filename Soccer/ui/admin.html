@@ -1089,5 +1089,144 @@
   </script>
 
   <script src="/js/tenant.js"></script>
+
+  <script>
+document.addEventListener("DOMContentLoaded", async () => {
+  // ---- detect Horses tenant ----
+  const q = new URLSearchParams(location.search);
+  const slug = q.get("t") || "Horses";
+  let sport = null;
+  try {
+    const cfg = await (await fetch(`/data/tenants/${slug}/config.json`)).json();
+    sport = cfg.sport || null;
+  } catch (e) {}
+  if (sport !== "horses") return; // do nothing for Soccer/Basketball tenants
+
+  // ---- find the Add Fixtures table (the one under "Add Fixtures (manual)") ----
+  const headerStrong = Array.from(document.querySelectorAll("strong"))
+    .find(el => (el.textContent || "").toLowerCase().includes("add fixtures"));
+  if (!headerStrong) return;
+
+  const fixturesBox = headerStrong.closest("div, section, fieldset") || headerStrong.parentElement;
+  const table = fixturesBox.querySelector("table");
+  if (!table) return;
+
+  // ---- change the header: # | Course | Time | Runners ----
+  const theadRow = table.querySelector("thead tr");
+  if (!theadRow) return;
+  const ths = Array.from(theadRow.children);
+  if (ths.length >= 5) {
+    ths[1].textContent = "Course";
+    ths[2].textContent = "Time";
+    ths[3].textContent = "Runners";
+    // hide the original Date column (index 3 before we re-use indexes below)
+    ths[3].style.display = "none";
+    // keep Time column visible (index 4)
+  }
+
+  // ---- transform each data row ----
+  const rows = Array.from(table.querySelectorAll("tbody tr"));
+  rows.forEach((tr, i) => {
+    const tds = Array.from(tr.children);
+    if (tds.length < 5) return;
+
+    // 1) Course (was Home input)
+    const homeCell = tds[1];
+    const homeInput = homeCell.querySelector("input,textarea");
+    if (homeInput) {
+      homeInput.type = "text";
+      homeInput.placeholder = "e.g., Flemington";
+      homeInput.classList.add("rc-course");
+    }
+
+    // 2) Hide Date column completely
+    const dateCell = tds[3];
+    dateCell.style.display = "none";
+
+    // 3) Time cell -> one datetime-local input
+    const timeCell = tds[4];
+    let timeInput = timeCell.querySelector("input[type='datetime-local']");
+    if (!timeInput) {
+      // replace whatever is there with one datetime-local input
+      timeCell.innerHTML = '<input class="rc-time" type="datetime-local">';
+    } else {
+      timeInput.classList.add("rc-time");
+    }
+
+    // 4) Runners (was Away) -> multiline textarea (one runner per line)
+    const awayCell = tds[2];
+    const existing = awayCell.querySelector("input,textarea");
+    const ta = document.createElement("textarea");
+    ta.className = "rc-runners";
+    ta.rows = 4;
+    ta.placeholder = "1. Horse Name\n2. Next Horse\n3. ...";
+    if (existing && existing.value) ta.value = existing.value;
+    awayCell.innerHTML = "";
+    awayCell.appendChild(ta);
+
+    // mark row number
+    tr.dataset.race = String(i + 1);
+  });
+
+  // ---- add Save Race Card button; hide old "Submit Fixtures" ----
+  const oldSubmit = Array.from(fixturesBox.querySelectorAll("button,input[type=submit]"))
+    .find(b => (b.textContent || b.value || "").toLowerCase().includes("submit fixtures"));
+  if (oldSubmit) oldSubmit.style.display = "none";
+
+  let saveBtn = fixturesBox.querySelector("#save-racecard");
+  if (!saveBtn) {
+    saveBtn = document.createElement("button");
+    saveBtn.id = "save-racecard";
+    saveBtn.type = "button";
+    saveBtn.textContent = "Save Race Card";
+    saveBtn.className = "btn primary";
+    saveBtn.style.marginTop = "10px";
+    fixturesBox.appendChild(saveBtn);
+  }
+
+  // get current leg number from the page if present; fallback to 1
+  const legFromUI = (() => {
+    const el = document.querySelector("[data-current-leg], #current-leg, .current-leg");
+    const n = el && Number(el.value || el.textContent);
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  })();
+  const currentLeg = legFromUI;
+
+  // ---- save handler -> write leg-N.json with course, time, runners[] ----
+  saveBtn.onclick = async () => {
+    const races = rows.map((tr, idx) => {
+      const num = Number(tr.dataset.race || (idx + 1));
+      const course = tr.querySelector(".rc-course")?.value?.trim() || null;
+      const dt = tr.querySelector(".rc-time")?.value || "";
+      const start = dt ? new Date(dt).toISOString() : null;
+
+      // runners: split by line; strip numbering like "1. Name" or "1) Name"
+      const lines = (tr.querySelector(".rc-runners")?.value || "")
+        .split(/\r?\n/)
+        .map(s => s.trim())
+        .filter(Boolean)
+        .map(s => s.replace(/^\d+\s*[\.\-\)]\s*/, ""));
+
+      return {
+        num, name: `Race ${num}`,
+        course, start,
+        status: "scheduled",
+        result: { win: null, place2: null, place3: null },
+        runners: lines
+      };
+    });
+
+    const payload = { leg: currentLeg, status: "scheduled", races };
+    const res = await fetch(`/api/horse/legs/${currentLeg}/races?t=${slug}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) { alert("Failed to save race card."); return; }
+    alert("Race card saved.");
+  };
+});
+</script>
+
 </body>
 </html>
