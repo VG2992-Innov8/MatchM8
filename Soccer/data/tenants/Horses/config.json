@@ -2,8 +2,6 @@
   "defaultCompetition": "Cup-2025",
   "locks": { "predictions": false, "results": false },
   "finals": { "autoRoute": false }
-}
-{
   "sport": "horses",
   "season_year": 2025,
   "legs_total": 5,
