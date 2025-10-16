@@ -239,3 +239,103 @@
     runWhenReady();
   }
 })();
+(function () {
+  const strong = [...document.querySelectorAll("strong")]
+    .find(el => (el.textContent||"").toLowerCase().includes("add fixtures"));
+  if (!strong) { console.warn("Add Fixtures block not found"); return; }
+  const box = strong.closest("div,section,fieldset") || strong.parentElement;
+  const table = box.querySelector("#addFixturesTbl");
+  if (!table) { console.warn("addFixturesTbl not found"); return; }
+
+  // header: # | Course | Time | Runners (hide Date)
+  const th = table.querySelectorAll("thead tr th");
+  if (th.length >= 5) {
+    th[1].textContent = "Course";
+    th[2].textContent = "Time";
+    th[3].textContent = "Runners";
+    th[3].style.display = "none";
+  }
+
+  // rows
+  const rows = table.querySelectorAll("tbody tr");
+  rows.forEach((tr, i) => {
+    const td = tr.querySelectorAll("td");
+    if (td.length < 5) return;
+
+    const home = td[1].querySelector("input,textarea");
+    if (home) { home.type = "text"; home.placeholder = "e.g., Flemington"; home.classList.add("rc-course"); }
+
+    td[3].style.display = "none";                       // hide Date
+    td[4].innerHTML = '<input class="rc-time" type="datetime-local">'; // Time
+
+    const ta = document.createElement("textarea");      // Runners
+    ta.className = "rc-runners"; ta.rows = 4;
+    ta.placeholder = "1. Horse Name\n2. Next Horse\n3. ...";
+    td[2].innerHTML = ""; td[2].appendChild(ta);
+
+    tr.dataset.race = String(i + 1);
+  });
+
+  // swap buttons
+  const old = [...box.querySelectorAll("button,input[type=submit]")]
+    .find(b => (b.textContent||b.value||"").toLowerCase().includes("submit fixtures"));
+  if (old) old.style.display = "none";
+
+  let save = box.querySelector("#save-racecard");
+  if (!save) {
+    save = document.createElement("button");
+    save.id = "save-racecard";
+    save.type = "button";
+    save.textContent = "Save Race Card";
+    save.className = "btn primary";
+    save.style.marginTop = "10px";
+    box.appendChild(save);
+  }
+
+  const slug = new URLSearchParams(location.search).get("t") || "Horses";
+  const leg = Number(document.getElementById("week")?.value || 1);
+
+  save.onclick = async () => {
+    const bodyRows = [...table.querySelectorAll("tbody tr")];
+    const races = bodyRows.map((tr, idx) => {
+      const num = Number(tr.dataset.race || (idx + 1));
+      const course = tr.querySelector(".rc-course")?.value?.trim() || null;
+      const dt = tr.querySelector(".rc-time")?.value || "";
+      const start = dt ? new Date(dt).toISOString() : null;
+      const runners = (tr.querySelector(".rc-runners")?.value || "")
+        .split(/\r?\n/).map(s => s.trim()).filter(Boolean)
+        .map(s => s.replace(/^\d+\s*[\.\-\)]\s*/, ""));
+      return { num, name: `Race ${num}`, course, start,
+               status: "scheduled",
+               result: { win: null, place2: null, place3: null },
+               runners };
+    });
+    const res = await fetch(`/api/horse/legs/${leg}/races?t=${encodeURIComponent(slug)}`, {
+      method: "POST",
+      headers: { "Content-Type":"application/json" },
+      body: JSON.stringify({ leg, status:"scheduled", races })
+    });
+    if (!res.ok) return alert("Failed to save race card.");
+    alert("Race card saved.");
+  };
+
+  // canary
+strong.textContent = "Build Race Card (Leg) — HORSES"; // canary
+// --- Limit to 5 races for Horses ---
+if (typeof bulkClear === "function" && typeof bulkAddRows === "function") {
+  try {
+    bulkClear();          // remove whatever init added
+    bulkAddRows(5);       // show exactly 5 rows
+  } catch {}
+}
+const addBtn = document.getElementById("btnBulkAddRows");
+if (addBtn) {
+  addBtn.textContent = "Add 5 Rows";
+  // intercept the click before the original handler adds 10
+  addBtn.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    ev.stopImmediatePropagation();   // block the old 10-rows handler
+    if (typeof bulkAddRows === "function") bulkAddRows(5);
+  }, true); // capture phase to beat the existing listener
+}
+})();
